@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance Dashboard - CARE SYSTEM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Fall Detection Performance Dashboard</h1>
+            <p class="text-gray-600">Real-time metrics and analytics</p>
+        </div>
+
+        <!-- Metrics Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <!-- Accuracy -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mr-4">
+                        <span class="text-2xl">🎯</span>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500">Accuracy</p>
+                        <p id="accuracy" class="text-2xl font-bold text-gray-800">0%</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- F1 Score -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-4">
+                        <span class="text-2xl">📈</span>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500">F1 Score</p>
+                        <p id="f1-score" class="text-2xl font-bold text-gray-800">0%</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Precision -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mr-4">
+                        <span class="text-2xl">✅</span>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500">Precision</p>
+                        <p id="precision" class="text-2xl font-bold text-gray-800">0%</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recall -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center">
+                    <div class="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center mr-4">
+                        <span class="text-2xl">🔍</span>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500">Recall</p>
+                        <p id="recall" class="text-2xl font-bold text-gray-800">0%</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts and Detailed Metrics -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Performance Metrics Chart -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Performance Metrics</h3>
+                <canvas id="metricsChart" width="400" height="200"></canvas>
+            </div>
+
+            <!-- Confusion Matrix -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Confusion Matrix</h3>
+                <div class="grid grid-cols-3 gap-2 text-center">
+                    <div></div>
+                    <div class="font-semibold">Predicted Fall</div>
+                    <div class="font-semibold">Predicted Normal</div>
+                    
+                    <div class="font-semibold">Actual Fall</div>
+                    <div id="tp" class="bg-green-100 p-2 rounded">0</div>
+                    <div id="fn" class="bg-red-100 p-2 rounded">0</div>
+                    
+                    <div class="font-semibold">Actual Normal</div>
+                    <div id="fp" class="bg-red-100 p-2 rounded">0</div>
+                    <div id="tn" class="bg-green-100 p-2 rounded">0</div>
+                </div>
+            </div>
+
+            <!-- System Performance -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">System Performance</h3>
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span>Frames Processed:</span>
+                        <span id="total-frames" class="font-semibold">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>FPS:</span>
+                        <span id="fps" class="font-semibold">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Avg Detection Time:</span>
+                        <span id="avg-time" class="font-semibold">0ms</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Session Duration:</span>
+                        <span id="session-duration" class="font-semibold">0s</span>
+                    </div>
+                </div>
+            </div>
+
+        <!-- Controls -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-4">Controls</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Detection Sensitivity</label>
+                    <div class="flex items-center gap-3">
+                        <input id="sensitivitySlider" type="range" min="0.1" max="1.0" step="0.05" class="w-full" />
+                        <span id="sensitivityValue" class="text-sm font-semibold w-12 text-right">0.5</span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Higher = more sensitive (may increase false positives)</p>
+                </div>
+                <button onclick="saveReport()" class="w-full bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600">
+                    💾 Save Performance Report
+                </button>
+                <a href="/api/features/export" class="block w-full text-center bg-purple-600 text-white py-2 px-4 rounded hover:bg-purple-700">
+                    ⬇️ Download Feature Logs (CSV)
+                </a>
+                <button onclick="resetMetrics()" class="w-full bg-gray-500 text-white py-2 px-4 rounded hover:bg-gray-600">
+                    🔄 Reset Metrics
+                </button>
+                <button onclick="refreshMetrics()" class="w-full bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600">
+                    🔄 Refresh Now
+                </button>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <script>
+        let metricsChart;
+        const slider = document.getElementById('sensitivitySlider');
+        const sliderVal = document.getElementById('sensitivityValue');
+
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/api/performance/metrics');
+                const metrics = await response.json();
+                updateDashboard(metrics);
+            } catch (error) {
+                console.error('Error fetching metrics:', error);
+            }
+        }
+
+        function updateDashboard(metrics) {
+            // Update main metrics
+            document.getElementById('accuracy').textContent = (metrics.accuracy * 100).toFixed(1) + '%';
+            document.getElementById('f1-score').textContent = (metrics.f1_score * 100).toFixed(1) + '%';
+            document.getElementById('precision').textContent = (metrics.precision * 100).toFixed(1) + '%';
+            document.getElementById('recall').textContent = (metrics.recall * 100).toFixed(1) + '%';
+
+            // Update confusion matrix
+            document.getElementById('tp').textContent = metrics.true_positives;
+            document.getElementById('fp').textContent = metrics.false_positives;
+            document.getElementById('tn').textContent = metrics.true_negatives;
+            document.getElementById('fn').textContent = metrics.false_negatives;
+
+            // Update system performance
+            document.getElementById('total-frames').textContent = metrics.total_frames_processed.toLocaleString();
+            document.getElementById('fps').textContent = metrics.frames_per_second;
+            document.getElementById('avg-time').textContent = metrics.average_detection_time_ms + 'ms';
+            document.getElementById('session-duration').textContent = metrics.session_duration_seconds + 's';
+
+            // Update chart
+            updateChart(metrics);
+        }
+
+        function updateChart(metrics) {
+            const ctx = document.getElementById('metricsChart').getContext('2d');
+            
+            if (metricsChart) {
+                metricsChart.destroy();
+            }
+
+            metricsChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Accuracy', 'Precision', 'Recall', 'F1-Score', 'Specificity'],
+                    datasets: [{
+                        label: 'Performance Metrics',
+                        data: [
+                            metrics.accuracy * 100,
+                            metrics.precision * 100,
+                            metrics.recall * 100,
+                            metrics.f1_score * 100,
+                            metrics.specificity * 100
+                        ],
+                        backgroundColor: [
+                            'rgba(34, 197, 94, 0.8)',
+                            'rgba(59, 130, 246, 0.8)',
+                            'rgba(168, 85, 247, 0.8)',
+                            'rgba(249, 115, 22, 0.8)',
+                            'rgba(16, 185, 129, 0.8)'
+                        ]
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: 'Percentage (%)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function saveReport() {
+            try {
+                const response = await fetch('/api/performance/save-report');
+                const result = await response.json();
+                alert('Report saved: ' + result.filename);
+            } catch (error) {
+                console.error('Error saving report:', error);
+            }
+        }
+
+        async function resetMetrics() {
+            if (confirm('Are you sure you want to reset all metrics?')) {
+                try {
+                    await fetch('/api/performance/reset');
+                    alert('Metrics reset successfully');
+                    fetchMetrics();
+                } catch (error) {
+                    console.error('Error resetting metrics:', error);
+                }
+            }
+        }
+
+        function refreshMetrics() {
+            fetchMetrics();
+        }
+
+        // Sensitivity wiring
+        async function loadSensitivity() {
+            try {
+                const res = await fetch('/api/sensitivity');
+                const data = await res.json();
+                // Backend stores threshold; map back to slider approx inverse of mapping
+                // We will just display the raw threshold value and let slider set 0.1-1.0
+                slider.value = 0.5;
+                sliderVal.textContent = Number(slider.value).toFixed(2);
+            } catch (e) { console.error(e); }
+        }
+
+        slider && slider.addEventListener('input', async (e) => {
+            const v = Number(e.target.value);
+            sliderVal.textContent = v.toFixed(2);
+            try {
+                await fetch('/api/sensitivity', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sensitivity: v })
+                });
+            } catch (e) { console.error(e); }
+        });
+
+        // Refresh metrics every 3 seconds
+        setInterval(fetchMetrics, 3000);
+        
+        // Initial load
+        fetchMetrics();
+        loadSensitivity();
+    </script>
+</body>
+</html>

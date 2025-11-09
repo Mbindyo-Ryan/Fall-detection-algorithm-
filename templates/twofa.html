@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two-Factor Authentication</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0fdf4; }
+        .input-2fa {
+            width: 3rem;
+            height: 3rem;
+            text-align: center;
+            font-size: 1.25rem;
+            border-radius: 0.5rem;
+            border: 2px solid #e5e7eb;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .input-2fa:focus {
+            outline: none;
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.5);
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen bg-mint-light p-4">
+
+    <div class="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 space-y-6 border border-gray-100">
+        <!-- Header -->
+        <div class="text-center">
+            <h1 class="text-3xl font-extrabold text-indigo-600 tracking-wider mb-2">2FA Verification</h1>
+            <p class="text-gray-600 text-sm">Enter the 6-digit code from your Google Authenticator app.</p>
+        </div>
+
+        <!-- Error Message -->
+        {% if error %}
+        <div class="p-3 bg-red-100 border border-red-400 text-red-700 rounded-xl text-sm text-center">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <!-- 2FA Form -->
+        <form method="POST" action="/twofa_verify" class="space-y-6">
+            <div class="flex justify-center space-x-3">
+                {% for i in range(6) %}
+                <input type="text" maxlength="1" name="digit{{ i }}" class="input-2fa" onkeyup="moveNext(this, event)">
+                {% endfor %}
+            </div>
+            
+            <!-- Hidden combined input (auto-filled by JS) -->
+            <input type="hidden" name="code" id="code">
+
+            <button type="submit" class="w-full py-3 px-4 rounded-xl text-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md transition duration-150 transform hover:scale-[1.01]">
+                Verify Code
+            </button>
+        </form>
+
+        <div class="text-center text-sm text-gray-500">
+            Lost access? <a href="#" class="text-indigo-500 hover:underline">Use a recovery code</a>
+        </div>
+    </div>
+
+    <script>
+        function moveNext(input, event) {
+            const inputs = Array.from(document.querySelectorAll('.input-2fa'));
+            const currentIndex = inputs.indexOf(input);
+            
+            if (event.key === 'Backspace' && input.value === '' && currentIndex > 0) {
+                inputs[currentIndex - 1].focus();
+                return;
+            }
+            if (input.value.length === input.maxLength && currentIndex < inputs.length - 1) {
+                inputs[currentIndex + 1].focus();
+            }
+
+            // Combine all digits into hidden code input
+            document.getElementById('code').value = inputs.map(i => i.value).join('');
+        }
+
+        // Focus on first box when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelector('.input-2fa').focus();
+        });
+    </script>
+
+</body>
+</html>

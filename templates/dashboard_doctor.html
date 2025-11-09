@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Doctor Dashboard - CARE System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+    .sidebar { transition: width 0.3s; }
+    .main-content { transition: margin-left 0.3s; }
+    .bg-mint-light { background-color: #f0fdf4; }
+    .hidden-view { display: none; }
+    .nav-item { cursor: pointer; }
+    .metric-card { transition: transform 0.2s; }
+    .metric-card:hover { transform: translateY(-2px); }
+    .severity-mild { background-color: #fef3c7; border-color: #f59e0b; }
+    .severity-moderate { background-color: #fed7aa; border-color: #f97316; }
+    .severity-severe { background-color: #fee2e2; border-color: #ef4444; }
+    .patient-card { transition: all 0.2s; }
+    .patient-card:hover { transform: translateY(-4px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+    .alert-badge { animation: pulse 2s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .video-modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); }
+    .video-modal-content { position: relative; margin: 2% auto; width: 90%; max-width: 1200px; }
+    .video-modal video { width: 100%; border-radius: 0.5rem; }
+  </style>
+</head>
+<body class="flex min-h-screen">
+  <!-- Sidebar -->
+  <nav id="sidebar" class="sidebar w-64 bg-white border-r border-gray-200 flex flex-col fixed top-0 left-0 h-full z-30 shadow-lg">
+    <div class="p-6 border-b border-gray-200">
+      <h1 class="text-2xl font-extrabold text-indigo-600 tracking-wider">CARE SYSTEM</h1>
+      <p class="text-xs text-gray-500 mt-1">Doctor Portal</p>
+    </div>
+    <div class="flex-grow p-4 space-y-2">
+      <button data-view="dashboard" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 bg-mint-light hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📊</span> Overview
+      </button>
+      <button data-view="patients" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">👥</span> All Patients
+      </button>
+      <button data-view="falls" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">⚠️</span> Fall Alerts
+      </button>
+      <button data-view="reviews" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📋</span> Review Falls
+      </button>
+      <button data-view="analytics" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📈</span> Analytics
+      </button>
+    </div>
+    <div class="p-4 border-t border-gray-200">
+      {% if success %}
+      <div class="p-2 mb-2 bg-green-100 border border-green-400 text-green-700 rounded-lg text-xs">{{ success }}</div>
+      {% endif %}
+      <form method="POST" action="{{ url_for('logout') }}">
+        <button type="submit" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-red-600 hover:bg-red-50 transition">
+          <span class="text-xl mr-3">🚪</span> Logout
+        </button>
+      </form>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main-content flex-grow ml-64 p-8 bg-mint-light min-h-screen">
+    <!-- OVERVIEW VIEW -->
+    <div id="dashboard-view" class="view-content">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Doctor Dashboard</h2>
+        <p class="text-gray-500 mt-1">Welcome, Dr. {{ user_name }} - Monitor all patients in real-time.</p>
+      </header>
+
+      <!-- Key Metrics -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">Total Patients</p>
+          <p id="total-patients" class="text-4xl font-bold text-indigo-600 mt-1">0</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">Falls Today</p>
+          <p id="falls-today" class="text-4xl font-bold text-red-600 mt-1">0</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">High Alert</p>
+          <p id="high-alert" class="text-4xl font-bold text-orange-600 mt-1">0</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">Active Monitoring</p>
+          <p id="active-monitoring" class="text-4xl font-bold text-green-600 mt-1">0</p>
+        </div>
+      </div>
+
+      <!-- Detection Sensitivity -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 mb-10">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Detection Sensitivity</h3>
+        <div class="flex items-center gap-3">
+          <input id="doc-sensitivity" type="range" min="0.1" max="1.0" step="0.05" class="w-full" />
+          <span id="doc-sensitivity-value" class="text-sm font-semibold w-12 text-right">0.5</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">Higher = more sensitive (system-wide)</p>
+      </div>
+
+      <!-- Real-time Alerts -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 mb-10">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+          🚨 Real-Time Fall Alerts
+          <span id="alert-count" class="ml-2 alert-badge bg-red-600 text-white px-3 py-1 rounded-full text-sm">0</span>
+        </h3>
+        <div id="realtime-alerts" class="space-y-3 max-h-96 overflow-y-auto">
+          <p class="text-center text-gray-500">No active alerts</p>
+        </div>
+      </div>
+
+      <!-- Recent Fall Events with Video -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4">Recent Fall Events</h3>
+        <div id="recent-falls" class="space-y-4">
+          <p class="text-center text-gray-500">Loading events...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- PATIENTS VIEW -->
+    <div id="patients-view" class="view-content hidden-view">
+      <header class="mb-8 flex justify-between items-center">
+        <div>
+          <h2 class="text-4xl font-extrabold text-gray-900">All Patients</h2>
+          <p class="text-gray-500 mt-1">View and monitor all registered patients.</p>
+        </div>
+      </header>
+      <div id="patients-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <p class="text-center text-gray-500 col-span-full">Loading patients...</p>
+      </div>
+    </div>
+
+    <!-- FALLS VIEW -->
+    <div id="falls-view" class="view-content hidden-view">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Fall Events Management</h2>
+        <p class="text-gray-500 mt-1">Complete fall event history with video playback.</p>
+      </header>
+      <div id="falls-list" class="space-y-4">
+        <p class="text-center text-gray-500">Loading fall events...</p>
+      </div>
+    </div>
+
+    <!-- REVIEW FALLS VIEW -->
+    <div id="reviews-view" class="view-content hidden-view">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Review Falls</h2>
+        <p class="text-gray-500 mt-1">Review fall incidents and provide recommendations.</p>
+      </header>
+      
+      <!-- Filter Bar -->
+      <div class="bg-white p-4 rounded-2xl shadow-lg mb-6 flex gap-4 items-center">
+        <select id="review-filter" class="px-4 py-2 border rounded-lg">
+          <option value="all">All Falls</option>
+          <option value="unreviewed">Unreviewed</option>
+          <option value="reviewed">Reviewed</option>
+          <option value="completed">Completed</option>
+        </select>
+        <select id="severity-filter" class="px-4 py-2 border rounded-lg">
+          <option value="all">All Severities</option>
+          <option value="mild">Mild</option>
+          <option value="moderate">Moderate</option>
+          <option value="severe">Severe</option>
+        </select>
+        <button onclick="fetchReviews()" class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700">
+          🔄 Refresh
+        </button>
+      </div>
+
+      <!-- Falls List -->
+      <div id="reviews-list" class="space-y-4">
+        <p class="text-center text-gray-500">Loading reviews...</p>
+      </div>
+    </div>
+
+    <!-- ANALYTICS VIEW -->
+    <div id="analytics-view" class="view-content hidden-view">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Patient Analytics</h2>
+        <p class="text-gray-500 mt-1">Trends, patterns, and health insights.</p>
+      </header>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <h3 class="text-xl font-semibold mb-4">Falls by Severity</h3>
+          <div id="severity-chart" class="space-y-2">
+            <p class="text-gray-500">Loading...</p>
+          </div>
+        </div>
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <h3 class="text-xl font-semibold mb-4">Falls by Location</h3>
+          <div id="location-chart" class="space-y-2">
+            <p class="text-gray-500">Loading...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Video Modal -->
+  <div id="videoModal" class="video-modal">
+    <div class="video-modal-content">
+      <span class="close-button text-white text-4xl absolute top-0 right-4 cursor-pointer" onclick="closeVideoModal()">&times;</span>
+      <video id="fallVideoPlayer" controls autoplay>
+        Your browser does not support video playback.
+      </video>
+      <div id="videoInfo" class="text-white mt-4 p-4 bg-gray-800 rounded"></div>
+    </div>
+  </div>
+
+  <script>
+    const navItems = document.querySelectorAll('button.nav-item[data-view]');
+    const views = document.querySelectorAll('.view-content');
+    
+    function switchView(target) {
+      views.forEach(v => v.classList.add('hidden-view'));
+      const targetView = document.getElementById(`${target}-view`);
+      if (targetView) targetView.classList.remove('hidden-view');
+      
+      navItems.forEach(btn => btn.classList.remove('bg-mint-light'));
+      const activeButton = document.querySelector(`button[data-view="${target}"]`);
+      if (activeButton) activeButton.classList.add('bg-mint-light');
+      
+      if (target === 'patients') fetchPatients();
+      if (target === 'falls') fetchAllFalls();
+      if (target === 'reviews') fetchReviews();
+      if (target === 'analytics') fetchAnalytics();
+    }
+    
+    navItems.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.getAttribute('data-view');
+        if (view) switchView(view);
+      });
+    });
+    
+    switchView('dashboard');
+
+    // Fetch Dashboard Data
+    async function fetchDashboard() {
+      try {
+        const [patientsRes, fallsRes] = await Promise.all([
+          fetch('/api/users'),
+          fetch('/api/falls')
+        ]);
+        const patientsData = await patientsRes.json();
+        const fallsData = await fallsRes.json();
+        
+        const today = new Date().toISOString().split('T')[0];
+        const todayFalls = fallsData.falls.filter(f => f.timestamp.startsWith(today));
+        const highAlert = patientsData.users.filter(u => u.status === 'High Alert').length;
+        
+        document.getElementById('total-patients').textContent = patientsData.users.length;
+        document.getElementById('falls-today').textContent = todayFalls.length;
+        document.getElementById('high-alert').textContent = highAlert;
+        document.getElementById('active-monitoring').textContent = patientsData.users.length;
+        
+        // Recent severe falls
+        const recentSevere = fallsData.falls.filter(f => f.severity === 'severe').slice(0, 5);
+        document.getElementById('alert-count').textContent = recentSevere.length;
+        renderRealtimeAlerts(recentSevere);
+        renderRecentFalls(fallsData.falls.slice(0, 10));
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    function renderRealtimeAlerts(alerts) {
+      const container = document.getElementById('realtime-alerts');
+      container.innerHTML = '';
+      if (alerts.length === 0) {
+        container.innerHTML = '<p class="text-center text-gray-500">No active alerts</p>';
+        return;
+      }
+      alerts.forEach(alert => {
+        container.insertAdjacentHTML('beforeend', `
+          <div class="p-4 rounded-xl border-l-4 severity-severe flex justify-between items-center">
+            <div>
+              <p class="font-semibold">${alert.user_name} - SEVERE FALL</p>
+              <p class="text-xs text-gray-600">${alert.timestamp} • ${alert.location || 'Unknown'}</p>
+            </div>
+            <button onclick="playVideo(${alert.id}, '${alert.user_name}', '${alert.timestamp}')" 
+                    class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg">▶️ Watch</button>
+          </div>`);
+      });
+    }
+
+    function renderRecentFalls(falls) {
+      const container = document.getElementById('recent-falls');
+      container.innerHTML = '';
+      if (falls.length === 0) {
+        container.innerHTML = '<p class="text-center text-gray-500">No recent falls</p>';
+        return;
+      }
+      falls.forEach(fall => {
+        const severityClass = `severity-${fall.severity || 'moderate'}`;
+        container.insertAdjacentHTML('beforeend', `
+          <div class="p-6 rounded-xl border-l-4 ${severityClass} flex justify-between items-start">
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <p class="font-semibold text-lg">${fall.user_name}</p>
+                <span class="px-2 py-1 bg-gray-200 rounded text-xs capitalize">${fall.severity || 'moderate'}</span>
+              </div>
+              <p class="text-sm text-gray-600 mt-1">${fall.timestamp} • ${fall.location || 'Unknown Location'}</p>
+              <p class="text-sm mt-2">${fall.details || 'No details'}</p>
+            </div>
+            ${fall.has_video ? `
+              <button onclick="playVideo(${fall.id}, '${fall.user_name}', '${fall.timestamp}')" 
+                      class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg ml-4">
+                ▶️ Play Video
+              </button>
+            ` : '<span class="text-gray-400 ml-4">No video</span>'}
+          </div>`);
+      });
+    }
+
+    async function fetchPatients() {
+      try {
+        const res = await fetch('/api/users');
+        const data = await res.json();
+        renderPatients(data.users);
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    function renderPatients(patients) {
+      const grid = document.getElementById('patients-grid');
+      grid.innerHTML = '';
+      if (patients.length === 0) {
+        grid.innerHTML = '<p class="text-center text-gray-500 col-span-full">No patients registered.</p>';
+        return;
+      }
+      patients.forEach(p => {
+        const statusColor = p.status === 'High Alert' ? 'border-red-500' : 'border-green-500';
+        grid.insertAdjacentHTML('beforeend', `
+          <div class="patient-card bg-white p-6 rounded-2xl shadow-lg border-t-4 ${statusColor}">
+            <div class="flex justify-between items-start mb-2">
+              <p class="text-xl font-bold">${p.name}</p>
+              <span class="px-2 py-1 ${p.status === 'High Alert' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'} rounded text-xs">
+                ${p.status}
+              </span>
+            </div>
+            <p class="text-sm text-gray-500">📧 ${p.email}</p>
+            <p class="text-sm text-gray-500">📞 ${p.phone}</p>
+            <p class="text-sm text-gray-500 mt-2">Last Fall: ${p.last_fall || 'Never'}</p>
+            <button onclick="viewPatientFalls('${p.id}')" class="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg">
+              View Falls
+            </button>
+          </div>`);
+      });
+    }
+
+    async function fetchAllFalls() {
+      try {
+        const res = await fetch('/api/falls');
+        const data = await res.json();
+        renderAllFalls(data.falls);
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    function renderAllFalls(falls) {
+      const list = document.getElementById('falls-list');
+      list.innerHTML = '';
+      if (falls.length === 0) {
+        list.innerHTML = '<p class="text-center text-gray-500">No fall events recorded.</p>';
+        return;
+      }
+      falls.forEach(fall => {
+        const severityClass = `severity-${fall.severity || 'moderate'}`;
+        list.insertAdjacentHTML('beforeend', `
+          <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 ${severityClass}">
+            <div class="flex justify-between items-start">
+              <div class="flex-1">
+                <div class="flex items-center gap-2 mb-2">
+                  <p class="font-semibold text-lg">${fall.user_name}</p>
+                  <span class="px-2 py-1 bg-gray-200 rounded text-xs capitalize">${fall.severity || 'moderate'}</span>
+                </div>
+                <p class="text-sm text-gray-600">${fall.timestamp}</p>
+                <p class="text-sm text-gray-600">Location: ${fall.location || 'Unknown'}</p>
+                <p class="text-sm mt-2">${fall.details || 'No details'}</p>
+              </div>
+              ${fall.has_video ? `
+                <button onclick="playVideo(${fall.id}, '${fall.user_name}', '${fall.timestamp}')" 
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg ml-4">
+                  ▶️ Play Video
+                </button>
+              ` : ''}
+            </div>
+          </div>`);
+      });
+    }
+
+    async function fetchAnalytics() {
+      try {
+        const res = await fetch('/api/falls');
+        const data = await res.json();
+        
+        // Severity breakdown
+        const severityCounts = { mild: 0, moderate: 0, severe: 0 };
+        data.falls.forEach(f => {
+          const sev = f.severity || 'moderate';
+          if (severityCounts[sev] !== undefined) severityCounts[sev]++;
+        });
+        
+        const severityHtml = Object.entries(severityCounts).map(([sev, count]) => `
+          <div class="flex justify-between items-center p-2">
+            <span class="capitalize">${sev}</span>
+            <span class="font-bold">${count}</span>
+          </div>
+        `).join('');
+        document.getElementById('severity-chart').innerHTML = severityHtml;
+        
+        // Location breakdown
+        const locationCounts = {};
+        data.falls.forEach(f => {
+          const loc = f.location || 'Unknown';
+          locationCounts[loc] = (locationCounts[loc] || 0) + 1;
+        });
+        
+        const locationHtml = Object.entries(locationCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([loc, count]) => `
+          <div class="flex justify-between items-center p-2">
+            <span>${loc}</span>
+            <span class="font-bold">${count}</span>
+          </div>
+        `).join('');
+        document.getElementById('location-chart').innerHTML = locationHtml;
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    function playVideo(fallId, userName, timestamp) {
+      const modal = document.getElementById('videoModal');
+      const player = document.getElementById('fallVideoPlayer');
+      const info = document.getElementById('videoInfo');
+      
+      player.src = `/api/falls/${fallId}/video`;
+      info.innerHTML = `<p class="font-semibold">Patient: ${userName}</p><p>Time: ${timestamp}</p>`;
+      modal.style.display = 'block';
+    }
+
+    function closeVideoModal() {
+      const modal = document.getElementById('videoModal');
+      const player = document.getElementById('fallVideoPlayer');
+      modal.style.display = 'none';
+      player.pause();
+      player.src = '';
+    }
+
+    window.onclick = (e) => {
+      const modal = document.getElementById('videoModal');
+      if (e.target === modal) closeVideoModal();
+    };
+
+    function viewPatientFalls(patientId) {
+      // Filter falls by patient - would need additional API endpoint
+      alert('Viewing falls for patient: ' + patientId);
+    }
+
+    setInterval(fetchDashboard, 5000);
+    document.addEventListener('DOMContentLoaded', fetchDashboard);
+
+    // Sensitivity control wiring
+    const docSlider = document.getElementById('doc-sensitivity');
+    const docValue = document.getElementById('doc-sensitivity-value');
+    async function loadSensitivity() {
+      try {
+        const res = await fetch('/api/sensitivity');
+        await res.json();
+        docSlider.value = 0.5; // midpoint default
+        docValue.textContent = Number(docSlider.value).toFixed(2);
+      } catch (e) { console.error(e); }
+    }
+    docSlider && docSlider.addEventListener('input', async (e) => {
+      const v = Number(e.target.value);
+      docValue.textContent = v.toFixed(2);
+      try {
+        await fetch('/api/sensitivity', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sensitivity: v }) });
+      } catch (e) { console.error(e); }
+    });
+    document.addEventListener('DOMContentLoaded', loadSensitivity);
+
+    // Review Falls Functions
+    async function fetchReviews() {
+      try {
+        const statusFilter = document.getElementById('review-filter').value;
+        const severityFilter = document.getElementById('severity-filter').value;
+        
+        const res = await fetch(`/api/falls/reviews?status=${statusFilter}&severity=${severityFilter}`);
+        const data = await res.json();
+        renderReviews(data.falls || []);
+      } catch (err) {
+        console.error('Error fetching reviews:', err);
+      }
+    }
+
+    function renderReviews(falls) {
+      const container = document.getElementById('reviews-list');
+      container.innerHTML = '';
+      
+      if (falls.length === 0) {
+        container.innerHTML = '<p class="text-center text-gray-500">No falls to review</p>';
+        return;
+      }
+      
+      falls.forEach(fall => {
+        const severityClass = `severity-${fall.severity || 'moderate'}`;
+        const hasReview = fall.review && fall.review.id;
+        const reviewStatus = hasReview ? fall.review.status : 'unreviewed';
+        
+        container.insertAdjacentHTML('beforeend', `
+          <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 ${severityClass}">
+            <div class="flex justify-between items-start mb-4">
+              <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                  <h3 class="text-xl font-semibold">${fall.user_name}</h3>
+                  <span class="px-2 py-1 bg-gray-200 rounded text-xs capitalize">${fall.severity}</span>
+                  <span class="px-2 py-1 ${reviewStatus === 'unreviewed' ? 'bg-yellow-200' : 'bg-green-200'} rounded text-xs capitalize">${reviewStatus}</span>
+                </div>
+                <p class="text-sm text-gray-600">${fall.timestamp} • ${fall.location || 'Unknown'}</p>
+                <p class="text-sm mt-2">${fall.details || 'No details'}</p>
+              </div>
+              <div class="flex gap-2 ml-4">
+                ${fall.has_video ? `<button onclick="playVideo(${fall.id})" class="bg-indigo-600 text-white px-4 py-2 rounded-lg">▶️ Video</button>` : ''}
+                <button onclick="openReviewModal(${fall.id})" class="bg-blue-600 text-white px-4 py-2 rounded-lg">
+                  ${hasReview ? '📝 Edit Review' : '📋 Review'}
+                </button>
+                ${hasReview ? `<button onclick="generateReport(${fall.id})" class="bg-green-600 text-white px-4 py-2 rounded-lg">📄 Report</button>` : ''}
+              </div>
+            </div>
+            ${hasReview ? `
+              <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+                <p class="font-semibold mb-2">Doctor's Review:</p>
+                <p class="text-sm mb-2">${fall.review.remarks || 'No remarks'}</p>
+                <p class="text-sm"><strong>Recommendations:</strong> ${fall.review.recommendations || 'None'}</p>
+                ${fall.review.follow_up_date ? `<p class="text-sm mt-1"><strong>Follow-up:</strong> ${fall.review.follow_up_date}</p>` : ''}
+              </div>
+            ` : ''}
+          </div>
+        `);
+      });
+    }
+
+    function openReviewModal(fallId) {
+      // Fetch fall details and existing review
+      fetch(`/api/falls/${fallId}/review`)
+        .then(res => res.json())
+        .then(data => {
+          showReviewModal(data.fall, data.review);
+        })
+        .catch(err => {
+          console.error('Error:', err);
+          alert('Error loading fall details');
+        });
+    }
+
+    function showReviewModal(fall, review) {
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+      modal.innerHTML = `
+        <div class="bg-white rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+          <h2 class="text-2xl font-bold mb-4">Review Fall Incident</h2>
+          <div class="mb-4">
+            <p><strong>Patient:</strong> ${fall.user_name}</p>
+            <p><strong>Date:</strong> ${fall.timestamp}</p>
+            <p><strong>Severity:</strong> ${fall.severity}</p>
+            <p><strong>Location:</strong> ${fall.location || 'Unknown'}</p>
+          </div>
+          <form id="reviewForm" onsubmit="submitReview(event, ${fall.id})">
+            <div class="mb-4">
+              <label class="block text-sm font-semibold mb-2">Remarks</label>
+              <textarea id="remarks" class="w-full p-3 border rounded-lg" rows="4" required>${review ? review.remarks || '' : ''}</textarea>
+            </div>
+            <div class="mb-4">
+              <label class="block text-sm font-semibold mb-2">Recommended Actions</label>
+              <div class="space-y-2">
+                <label class="flex items-center"><input type="checkbox" name="actions" value="xray" ${review && review.recommended_actions && review.recommended_actions.includes('xray') ? 'checked' : ''}> X-Ray</label>
+                <label class="flex items-center"><input type="checkbox" name="actions" value="physiotherapy" ${review && review.recommended_actions && review.recommended_actions.includes('physiotherapy') ? 'checked' : ''}> Physiotherapy</label>
+                <label class="flex items-center"><input type="checkbox" name="actions" value="consultation" ${review && review.recommended_actions && review.recommended_actions.includes('consultation') ? 'checked' : ''}> Consultation</label>
+                <label class="flex items-center"><input type="checkbox" name="actions" value="medication_review" ${review && review.recommended_actions && review.recommended_actions.includes('medication_review') ? 'checked' : ''}> Medication Review</label>
+                <label class="flex items-center"><input type="checkbox" name="actions" value="follow_up" ${review && review.recommended_actions && review.recommended_actions.includes('follow_up') ? 'checked' : ''}> Follow-up</label>
+              </div>
+            </div>
+            <div class="mb-4">
+              <label class="block text-sm font-semibold mb-2">Follow-up Date (optional)</label>
+              <input type="date" id="follow_up_date" class="w-full p-3 border rounded-lg" value="${review && review.follow_up_date ? review.follow_up_date.split(' ')[0] : ''}">
+            </div>
+            <div class="mb-4">
+              <label class="block text-sm font-semibold mb-2">Status</label>
+              <select id="status" class="w-full p-3 border rounded-lg">
+                <option value="pending" ${review && review.status === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="reviewed" ${review && review.status === 'reviewed' ? 'selected' : ''}>Reviewed</option>
+                <option value="completed" ${review && review.status === 'completed' ? 'selected' : ''}>Completed</option>
+              </select>
+            </div>
+            <div class="flex gap-3">
+              <button type="submit" class="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700">Save Review</button>
+              <button type="button" onclick="this.closest('.fixed').remove()" class="flex-1 bg-gray-300 text-gray-700 py-3 rounded-lg hover:bg-gray-400">Cancel</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    async function submitReview(event, fallId) {
+      event.preventDefault();
+      const form = event.target;
+      const remarks = document.getElementById('remarks').value;
+      const actions = Array.from(form.querySelectorAll('input[name="actions"]:checked')).map(cb => cb.value);
+      const followUpDate = document.getElementById('follow_up_date').value;
+      const status = document.getElementById('status').value;
+      
+      try {
+        const res = await fetch(`/api/falls/${fallId}/review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            remarks,
+            recommended_actions: actions,
+            follow_up_date: followUpDate || null,
+            status
+          })
+        });
+        
+        if (res.ok) {
+          alert('Review saved successfully!');
+          document.querySelector('.fixed').remove();
+          fetchReviews();
+        } else {
+          alert('Error saving review');
+        }
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error saving review');
+      }
+    }
+
+    async function generateReport(fallId) {
+      try {
+        const res = await fetch(`/api/falls/${fallId}/report`);
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `fall_report_${fallId}.pdf`;
+        a.click();
+      } catch (err) {
+        console.error('Error generating report:', err);
+        alert('Error generating report');
+      }
+    }
+  </script>
+</body>
+</html>
+
