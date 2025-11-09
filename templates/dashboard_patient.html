@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Care Dashboard - Patient</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+    .sidebar { transition: width 0.3s; }
+    .main-content { transition: margin-left 0.3s; }
+    .bg-mint-light { background-color: #f0fdf4; }
+    .hidden-view { display: none; }
+    .nav-item { cursor: pointer; }
+    #video-frame { width: 100%; border-radius: 1rem; border: 1px solid #e5e7eb; max-height: 60vh; object-fit: cover;}
+    .metric-card { transition: transform 0.2s; }
+    .metric-card:hover { transform: translateY(-2px); }
+    .severity-mild { background-color: #fef3c7; border-color: #f59e0b; }
+    .severity-moderate { background-color: #fed7aa; border-color: #f97316; }
+    .severity-severe { background-color: #fee2e2; border-color: #ef4444; }
+  </style>
+</head>
+<body class="flex min-h-screen">
+  <!-- Sidebar -->
+  <nav id="sidebar" class="sidebar w-64 bg-white border-r border-gray-200 flex flex-col fixed top-0 left-0 h-full z-30 shadow-lg">
+    <div class="p-6 border-b border-gray-200">
+      <h1 class="text-2xl font-extrabold text-indigo-600 tracking-wider">CARE SYSTEM</h1>
+      <p class="text-xs text-gray-500 mt-1">Patient Portal</p>
+    </div>
+    <div class="flex-grow p-4 space-y-2">
+      <button data-view="dashboard" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 bg-mint-light hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📊</span> My Stats
+      </button>
+      <button data-view="history" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📜</span> My History
+      </button>
+      <button data-view="settings" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">⚙️</span> Settings
+      </button>
+    </div>
+    <div class="p-4 border-t border-gray-200">
+      {% if success %}
+      <div class="p-2 mb-2 bg-green-100 border border-green-400 text-green-700 rounded-lg text-xs">{{ success }}</div>
+      {% endif %}
+      <form method="POST" action="{{ url_for('logout') }}">
+        <button type="submit" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-red-600 hover:bg-red-50 transition">
+          <span class="text-xl mr-3">🚪</span> Logout
+        </button>
+      </form>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main-content flex-grow ml-64 p-8 bg-mint-light min-h-screen">
+    <!-- DASHBOARD VIEW -->
+    <div id="dashboard-view" class="view-content">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Welcome, {{ user_name }}!</h2>
+        <p class="text-gray-500 mt-1">Your personal health monitoring dashboard.</p>
+      </header>
+
+      <!-- My Stats Today -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">My Falls Today</p>
+          <p id="my-falls-today" class="text-4xl font-bold text-red-600 mt-1">0</p>
+          <p class="text-xs text-gray-400 mt-2">Total fall events recorded today.</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">System Status</p>
+          <p id="my-system-status" class="text-4xl font-bold text-green-600 mt-1">Active</p>
+          <p class="text-xs text-gray-400 mt-2">Your monitoring is active.</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">Last Fall</p>
+          <p id="last-fall-time" class="text-2xl font-bold text-gray-600 mt-1">Never</p>
+          <p class="text-xs text-gray-400 mt-2">Most recent fall incident.</p>
+        </div>
+      </div>
+
+      <!-- Live Video Feed -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 mb-10">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4">Live Monitoring Feed</h3>
+        <div class="w-full">
+          <img id="video-frame" src="/video_feed?source={{ camera_url }}" alt="Live Video Feed" class="shadow-lg border-2 border-indigo-100 rounded-2xl w-full max-h-[70vh] min-h-[500px] object-contain">
+        </div>
+      </div>
+
+      <!-- My Recent Events -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4">My Recent Fall Events</h3>
+        <div id="my-event-feed" class="space-y-3 max-h-96 overflow-y-auto pr-2">
+          <p class="text-center text-gray-500">Loading events...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY VIEW -->
+    <div id="history-view" class="view-content hidden-view">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">My Fall History</h2>
+        <p class="text-gray-500 mt-1">Complete timeline of your fall events.</p>
+      </header>
+      <div id="history-list" class="space-y-4">
+        <p class="text-center text-gray-500">Loading history...</p>
+      </div>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div id="settings-view" class="view-content hidden-view">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">My Settings</h2>
+        <p class="text-gray-500 mt-1">Adjust your preferences.</p>
+      </header>
+      <div class="space-y-6">
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 space-y-4">
+          <h3 class="text-xl font-semibold text-gray-800 border-b pb-2">Security Settings</h3>
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-medium text-gray-700">Two-Factor Authentication (2FA)</p>
+              <p class="text-sm text-gray-500">Status:
+                {% if is_2fa_set_up %}
+                  <span class="text-green-600 font-semibold">Enabled</span>
+                {% else %}
+                  <span class="text-red-600 font-semibold">Disabled</span>
+                {% endif %}
+              </p>
+            </div>
+            <a href="{{ url_for('setup_2fa') }}" class="text-sm text-indigo-600 hover:text-indigo-800 underline">Manage 2FA</a>
+          </div>
+          <h3 class="text-xl font-semibold text-gray-800 border-b pb-2 mt-6">Detection Settings</h3>
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">Detection Sensitivity</label>
+            <div class="flex items-center gap-3">
+              <input id="pt-sensitivity" type="range" min="0.1" max="1.0" step="0.05" class="w-full" />
+              <span id="pt-sensitivity-value" class="text-sm font-semibold w-12 text-right">0.5</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">Higher = more sensitive (may increase false positives)</p>
+          </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 space-y-4">
+          <h3 class="text-xl font-semibold text-gray-800 border-b pb-2">My Care Team</h3>
+          <p class="text-sm text-gray-600 mb-4">Select your caretaker and doctor from the system.</p>
+          
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Select Caretaker</label>
+              <select id="caretaker-select" class="w-full border rounded-lg px-4 py-2">
+                <option value="">Loading caretakers...</option>
+              </select>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-2">Select Doctor</label>
+              <select id="doctor-select" class="w-full border rounded-lg px-4 py-2">
+                <option value="">Loading doctors...</option>
+              </select>
+            </div>
+            
+            <button onclick="saveCareTeam()" class="w-full bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
+              💾 Save Care Team
+            </button>
+            <div id="care-team-message" class="hidden text-sm mt-2"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const navItems = document.querySelectorAll('button.nav-item[data-view]');
+    const views = document.querySelectorAll('.view-content');
+    
+    function switchView(target) {
+      views.forEach(v => v.classList.add('hidden-view'));
+      const targetView = document.getElementById(`${target}-view`);
+      if (targetView) targetView.classList.remove('hidden-view');
+      
+      navItems.forEach(btn => btn.classList.remove('bg-mint-light'));
+      const activeButton = document.querySelector(`button[data-view="${target}"]`);
+      if (activeButton) activeButton.classList.add('bg-mint-light');
+      
+      if (target === 'history') fetchHistory();
+      if (target === 'settings') loadCareTeamOptions();
+    }
+    
+    navItems.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.getAttribute('data-view');
+        if (view) switchView(view);
+      });
+    });
+    
+    switchView('dashboard');
+
+    // Fetch My Stats
+    async function fetchMyStats() {
+      try {
+        const res = await fetch('/api/falls');
+        const data = await res.json();
+        const today = new Date().toISOString().split('T')[0];
+        const todayFalls = data.falls.filter(f => f.timestamp.startsWith(today));
+        document.getElementById('my-falls-today').textContent = todayFalls.length;
+        
+        if (data.falls.length > 0) {
+          const lastFall = data.falls[0];
+          document.getElementById('last-fall-time').textContent = lastFall.timestamp.split(' ')[1] || 'Unknown';
+        }
+        
+        renderMyEvents(data.falls.slice(0, 10));
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    async function renderMyEvents(events) {
+      const feed = document.getElementById('my-event-feed');
+      feed.innerHTML = '';
+      if (events.length === 0) {
+        feed.innerHTML = '<p class="text-center text-gray-500">No recent events. Stay safe! 🎉</p>';
+        return;
+      }
+      
+      for (const ev of events) {
+        const severityClass = `severity-${ev.severity || 'moderate'}`;
+        
+        // Fetch doctor remarks for this fall
+        let remarksData = null;
+        try {
+          const remarksRes = await fetch(`/api/falls/${ev.id}/remarks`);
+          if (remarksRes.ok) {
+            remarksData = await remarksRes.json();
+          }
+        } catch (err) {
+          console.error('Error fetching remarks:', err);
+        }
+        
+        const hasReview = remarksData && remarksData.review;
+        const hasFiles = remarksData && remarksData.files && remarksData.files.length > 0;
+        
+        feed.insertAdjacentHTML('beforeend', `
+          <div class="p-4 rounded-xl border-l-4 ${severityClass} mb-4">
+            <div class="flex justify-between items-start mb-3">
+              <div class="flex-1">
+                <p class="font-semibold">Fall Detected - ${ev.severity || 'moderate'}</p>
+                <p class="text-xs text-gray-600">${ev.timestamp} • ${ev.location || 'Unknown Location'}</p>
+                <p class="text-sm mt-1">${ev.details || 'No details available'}</p>
+              </div>
+              <div class="flex gap-2">
+                ${ev.has_video ? `<button onclick="playVideo(${ev.id})" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">▶️ Video</button>` : ''}
+                <button onclick="toggleFallDetails(${ev.id})" class="bg-blue-600 text-white px-3 py-1 rounded text-sm">
+                  ${hasReview ? '📋 View Review' : '📋 Details'}
+                </button>
+              </div>
+            </div>
+            
+            <!-- Doctor Review Section (initially hidden) -->
+            <div id="fall-details-${ev.id}" class="hidden mt-4 pt-4 border-t border-gray-200">
+              ${hasReview ? `
+                <div class="bg-blue-50 p-4 rounded-lg mb-3">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="text-xl">👨‍⚕️</span>
+                    <p class="font-semibold">Doctor's Review</p>
+                    <span class="text-xs text-gray-500">by ${remarksData.review.doctor_name}</span>
+                  </div>
+                  <p class="text-sm mb-2"><strong>Remarks:</strong> ${remarksData.review.remarks || 'No remarks'}</p>
+                  <p class="text-sm mb-2"><strong>Recommendations:</strong> ${remarksData.review.recommendations || 'None'}</p>
+                  ${remarksData.review.recommended_actions && remarksData.review.recommended_actions.length > 0 ? `
+                    <div class="mt-2">
+                      <p class="text-sm font-semibold mb-1">Recommended Actions:</p>
+                      <div class="flex flex-wrap gap-2">
+                        ${remarksData.review.recommended_actions.map(action => `
+                          <span class="px-2 py-1 bg-white rounded text-xs">${action.replace('_', ' ').toUpperCase()}</span>
+                        `).join('')}
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${remarksData.review.follow_up_date ? `
+                    <p class="text-sm mt-2"><strong>Follow-up Date:</strong> ${remarksData.review.follow_up_date}</p>
+                  ` : ''}
+                </div>
+              ` : `
+                <div class="bg-yellow-50 p-4 rounded-lg mb-3">
+                  <p class="text-sm text-yellow-800">⏳ Waiting for doctor's review...</p>
+                </div>
+              `}
+              
+              <!-- File Upload Section -->
+              <div class="mb-3">
+                <p class="font-semibold text-sm mb-2">📎 Upload Files (X-rays, Scans, Reports)</p>
+                <form id="upload-form-${ev.id}" onsubmit="uploadFile(event, ${ev.id})" class="flex gap-2">
+                  <input type="file" id="file-input-${ev.id}" accept=".pdf,.jpg,.jpeg,.png" required class="flex-1 text-sm">
+                  <select id="file-type-${ev.id}" class="px-2 py-1 border rounded text-sm">
+                    <option value="xray">X-Ray</option>
+                    <option value="scan">Scan</option>
+                    <option value="report">Report</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <button type="submit" class="bg-green-600 text-white px-4 py-1 rounded text-sm hover:bg-green-700">
+                    📤 Upload
+                  </button>
+                </form>
+              </div>
+              
+              <!-- Uploaded Files List -->
+              ${hasFiles ? `
+                <div class="mt-3">
+                  <p class="font-semibold text-sm mb-2">📁 Uploaded Files:</p>
+                  <div id="files-list-${ev.id}" class="space-y-2">
+                    ${remarksData.files.map(file => `
+                      <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                          <span class="text-xl">${file.file_type === 'xray' ? '🩻' : file.file_type === 'scan' ? '📊' : '📄'}</span>
+                          <div>
+                            <p class="text-sm font-medium">${file.file_name}</p>
+                            <p class="text-xs text-gray-500">Uploaded: ${file.uploaded_at}</p>
+                          </div>
+                        </div>
+                        <button onclick="viewFileComments(${file.id}, ${ev.id})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">
+                          💬 Comments
+                        </button>
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : `
+                <div id="files-list-${ev.id}" class="hidden"></div>
+              `}
+            </div>
+          </div>
+        `);
+      }
+    }
+    
+    function toggleFallDetails(fallId) {
+      const detailsDiv = document.getElementById(`fall-details-${fallId}`);
+      if (detailsDiv) {
+        detailsDiv.classList.toggle('hidden');
+        if (!detailsDiv.classList.contains('hidden')) {
+          // Refresh files list when expanded
+          refreshFilesList(fallId);
+        }
+      }
+    }
+    
+    async function uploadFile(event, fallId) {
+      event.preventDefault();
+      const form = event.target;
+      const fileInput = document.getElementById(`file-input-${fallId}`);
+      const fileType = document.getElementById(`file-type-${fallId}`).value;
+      
+      if (!fileInput.files[0]) {
+        alert('Please select a file');
+        return;
+      }
+      
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('file_type', fileType);
+      
+      try {
+        const res = await fetch(`/api/falls/${fallId}/files`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (res.ok) {
+          alert('File uploaded successfully!');
+          fileInput.value = '';
+          refreshFilesList(fallId);
+          // Refresh the event list to show new file
+          fetchMyStats();
+        } else {
+          alert('Error uploading file');
+        }
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error uploading file');
+      }
+    }
+    
+    async function refreshFilesList(fallId) {
+      try {
+        const res = await fetch(`/api/falls/${fallId}/files`);
+        const data = await res.json();
+        
+        const filesList = document.getElementById(`files-list-${fallId}`);
+        if (!filesList) return;
+        
+        if (data.files && data.files.length > 0) {
+          filesList.classList.remove('hidden');
+          filesList.innerHTML = data.files.map(file => `
+            <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+              <div class="flex items-center gap-2">
+                <span class="text-xl">${file.file_type === 'xray' ? '🩻' : file.file_type === 'scan' ? '📊' : '📄'}</span>
+                <div>
+                  <p class="text-sm font-medium">${file.file_name}</p>
+                  <p class="text-xs text-gray-500">Uploaded: ${file.uploaded_at}</p>
+                </div>
+              </div>
+              <button onclick="viewFileComments(${file.id}, ${fallId})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">
+                💬 Comments (${file.comment_count || 0})
+              </button>
+            </div>
+          `).join('');
+        } else {
+          filesList.innerHTML = '<p class="text-sm text-gray-500">No files uploaded yet</p>';
+        }
+      } catch (err) {
+        console.error('Error refreshing files:', err);
+      }
+    }
+    
+    async function viewFileComments(fileId, fallId) {
+      try {
+        const res = await fetch(`/api/files/${fileId}/comments`);
+        const data = await res.json();
+        
+        const modal = document.createElement('div');
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+        modal.innerHTML = `
+          <div class="bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+              <h2 class="text-2xl font-bold">Doctor's Comments</h2>
+              <button onclick="this.closest('.fixed').remove()" class="text-2xl">&times;</button>
+            </div>
+            <div class="space-y-3">
+              ${data.comments && data.comments.length > 0 ? 
+                data.comments.map(comment => `
+                  <div class="bg-blue-50 p-4 rounded-lg">
+                    <div class="flex justify-between items-start mb-2">
+                      <p class="font-semibold">${comment.doctor_name}</p>
+                      <p class="text-xs text-gray-500">${comment.created_at}</p>
+                    </div>
+                    <p class="text-sm">${comment.comment}</p>
+                  </div>
+                `).join('') :
+                '<p class="text-gray-500">No comments yet from doctor</p>'
+              }
+            </div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error loading comments');
+      }
+    }
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch('/api/falls');
+        const data = await res.json();
+        renderHistory(data.falls);
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    async function renderHistory(events) {
+      const list = document.getElementById('history-list');
+      list.innerHTML = '';
+      if (events.length === 0) {
+        list.innerHTML = '<p class="text-center text-gray-500">No fall history recorded.</p>';
+        return;
+      }
+      
+      for (const ev of events) {
+        const severityClass = `severity-${ev.severity || 'moderate'}`;
+        
+        // Fetch doctor remarks
+        let remarksData = null;
+        try {
+          const remarksRes = await fetch(`/api/falls/${ev.id}/remarks`);
+          if (remarksRes.ok) {
+            remarksData = await remarksRes.json();
+          }
+        } catch (err) {
+          console.error('Error fetching remarks:', err);
+        }
+        
+        const hasReview = remarksData && remarksData.review;
+        const hasFiles = remarksData && remarksData.files && remarksData.files.length > 0;
+        
+        list.insertAdjacentHTML('beforeend', `
+          <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 ${severityClass} mb-4">
+            <div class="flex justify-between items-start mb-3">
+              <div class="flex-1">
+                <p class="font-semibold text-lg">${ev.timestamp}</p>
+                <p class="text-sm text-gray-600">Location: ${ev.location || 'Unknown'}</p>
+                <p class="text-sm text-gray-600">Severity: <span class="font-semibold capitalize">${ev.severity || 'moderate'}</span></p>
+                <p class="text-sm mt-2">${ev.details || 'No details available'}</p>
+              </div>
+              <div class="flex gap-2">
+                ${ev.has_video ? `<button onclick="playVideo(${ev.id})" class="bg-indigo-600 text-white px-4 py-2 rounded-lg">▶️ Video</button>` : ''}
+                <button onclick="toggleHistoryDetails(${ev.id})" class="bg-blue-600 text-white px-4 py-2 rounded-lg">
+                  ${hasReview ? '📋 Review' : '📋 Details'}
+                </button>
+              </div>
+            </div>
+            
+            <!-- Doctor Review Section -->
+            <div id="history-details-${ev.id}" class="hidden mt-4 pt-4 border-t border-gray-200">
+              ${hasReview ? `
+                <div class="bg-blue-50 p-4 rounded-lg mb-3">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="text-xl">👨‍⚕️</span>
+                    <p class="font-semibold">Doctor's Review</p>
+                    <span class="text-xs text-gray-500">by ${remarksData.review.doctor_name} • ${remarksData.review.review_date}</span>
+                  </div>
+                  <p class="text-sm mb-2"><strong>Remarks:</strong> ${remarksData.review.remarks || 'No remarks'}</p>
+                  <p class="text-sm mb-2"><strong>Recommendations:</strong> ${remarksData.review.recommendations || 'None'}</p>
+                  ${remarksData.review.recommended_actions && remarksData.review.recommended_actions.length > 0 ? `
+                    <div class="mt-2">
+                      <p class="text-sm font-semibold mb-1">Recommended Actions:</p>
+                      <div class="flex flex-wrap gap-2">
+                        ${remarksData.review.recommended_actions.map(action => `
+                          <span class="px-2 py-1 bg-white rounded text-xs">${action.replace('_', ' ').toUpperCase()}</span>
+                        `).join('')}
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${remarksData.review.follow_up_date ? `
+                    <p class="text-sm mt-2"><strong>Follow-up Date:</strong> ${remarksData.review.follow_up_date}</p>
+                  ` : ''}
+                </div>
+              ` : `
+                <div class="bg-yellow-50 p-4 rounded-lg mb-3">
+                  <p class="text-sm text-yellow-800">⏳ Waiting for doctor's review...</p>
+                </div>
+              `}
+              
+              <!-- File Upload Section -->
+              <div class="mb-3">
+                <p class="font-semibold text-sm mb-2">📎 Upload Files (X-rays, Scans, Reports)</p>
+                <form id="history-upload-form-${ev.id}" onsubmit="uploadHistoryFile(event, ${ev.id})" class="flex gap-2">
+                  <input type="file" id="history-file-input-${ev.id}" accept=".pdf,.jpg,.jpeg,.png" required class="flex-1 text-sm">
+                  <select id="history-file-type-${ev.id}" class="px-2 py-1 border rounded text-sm">
+                    <option value="xray">X-Ray</option>
+                    <option value="scan">Scan</option>
+                    <option value="report">Report</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <button type="submit" class="bg-green-600 text-white px-4 py-1 rounded text-sm hover:bg-green-700">
+                    📤 Upload
+                  </button>
+                </form>
+              </div>
+              
+              <!-- Uploaded Files List -->
+              <div class="mt-3">
+                <p class="font-semibold text-sm mb-2">📁 Uploaded Files:</p>
+                <div id="history-files-list-${ev.id}" class="space-y-2">
+                  ${hasFiles ? remarksData.files.map(file => `
+                    <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+                      <div class="flex items-center gap-2">
+                        <span class="text-xl">${file.file_type === 'xray' ? '🩻' : file.file_type === 'scan' ? '📊' : '📄'}</span>
+                        <div>
+                          <p class="text-sm font-medium">${file.file_name}</p>
+                          <p class="text-xs text-gray-500">Uploaded: ${file.uploaded_at}</p>
+                        </div>
+                      </div>
+                      <button onclick="viewFileComments(${file.id}, ${ev.id})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">
+                        💬 Comments
+                      </button>
+                    </div>
+                  `).join('') : '<p class="text-sm text-gray-500">No files uploaded yet</p>'}
+                </div>
+              </div>
+            </div>
+          </div>
+        `);
+      }
+    }
+    
+    function toggleHistoryDetails(fallId) {
+      const detailsDiv = document.getElementById(`history-details-${fallId}`);
+      if (detailsDiv) {
+        detailsDiv.classList.toggle('hidden');
+        if (!detailsDiv.classList.contains('hidden')) {
+          refreshHistoryFilesList(fallId);
+        }
+      }
+    }
+    
+    async function uploadHistoryFile(event, fallId) {
+      event.preventDefault();
+      const fileInput = document.getElementById(`history-file-input-${fallId}`);
+      const fileType = document.getElementById(`history-file-type-${fallId}`).value;
+      
+      if (!fileInput.files[0]) {
+        alert('Please select a file');
+        return;
+      }
+      
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('file_type', fileType);
+      
+      try {
+        const res = await fetch(`/api/falls/${fallId}/files`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (res.ok) {
+          alert('File uploaded successfully!');
+          fileInput.value = '';
+          refreshHistoryFilesList(fallId);
+        } else {
+          alert('Error uploading file');
+        }
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error uploading file');
+      }
+    }
+    
+    async function refreshHistoryFilesList(fallId) {
+      try {
+        const res = await fetch(`/api/falls/${fallId}/files`);
+        const data = await res.json();
+        
+        const filesList = document.getElementById(`history-files-list-${fallId}`);
+        if (!filesList) return;
+        
+        if (data.files && data.files.length > 0) {
+          filesList.innerHTML = data.files.map(file => `
+            <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+              <div class="flex items-center gap-2">
+                <span class="text-xl">${file.file_type === 'xray' ? '🩻' : file.file_type === 'scan' ? '📊' : '📄'}</span>
+                <div>
+                  <p class="text-sm font-medium">${file.file_name}</p>
+                  <p class="text-xs text-gray-500">Uploaded: ${file.uploaded_at}</p>
+                </div>
+              </div>
+              <button onclick="viewFileComments(${file.id}, ${fallId})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">
+                💬 Comments (${file.comment_count || 0})
+              </button>
+            </div>
+          `).join('');
+        } else {
+          filesList.innerHTML = '<p class="text-sm text-gray-500">No files uploaded yet</p>';
+        }
+      } catch (err) {
+        console.error('Error refreshing files:', err);
+      }
+    }
+
+    function playVideo(fallId) {
+      window.open(`/api/falls/${fallId}/video`, '_blank');
+    }
+
+    setInterval(fetchMyStats, 5000);
+    document.addEventListener('DOMContentLoaded', fetchMyStats);
+
+    // Sensitivity control wiring
+    const ptSlider = document.getElementById('pt-sensitivity');
+    const ptValue = document.getElementById('pt-sensitivity-value');
+    async function loadSensitivity() {
+      try {
+        const res = await fetch('/api/sensitivity');
+        const data = await res.json();
+        ptSlider.value = 0.5; // default midpoint
+        ptValue.textContent = Number(ptSlider.value).toFixed(2);
+      } catch (e) { console.error(e); }
+    }
+    ptSlider && ptSlider.addEventListener('input', async (e) => {
+      const v = Number(e.target.value);
+      ptValue.textContent = v.toFixed(2);
+      try {
+        await fetch('/api/sensitivity', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sensitivity: v })
+        });
+      } catch (e) { console.error(e); }
+    });
+    document.addEventListener('DOMContentLoaded', loadSensitivity);
+
+    async function loadCareTeamOptions() {
+      try {
+        const [caretakersRes, doctorsRes] = await Promise.all([
+          fetch('/api/available/caretakers'),
+          fetch('/api/available/doctors')
+        ]);
+        
+        const caretakersData = await caretakersRes.json();
+        const doctorsData = await doctorsRes.json();
+        
+        const caretakerSelect = document.getElementById('caretaker-select');
+        const doctorSelect = document.getElementById('doctor-select');
+        
+        // Populate caretakers
+        caretakerSelect.innerHTML = '<option value="">Select a caretaker...</option>';
+        (caretakersData.caretakers || []).forEach(caretaker => {
+          caretakerSelect.innerHTML += `<option value="${caretaker.id}">${caretaker.name} (${caretaker.email})</option>`;
+        });
+        
+        // Populate doctors
+        doctorSelect.innerHTML = '<option value="">Select a doctor...</option>';
+        (doctorsData.doctors || []).forEach(doctor => {
+          doctorSelect.innerHTML += `<option value="${doctor.id}">${doctor.name} (${doctor.email})</option>`;
+        });
+      } catch (err) {
+        console.error('Error loading care team options:', err);
+      }
+    }
+
+    async function saveCareTeam() {
+      const caretakerId = document.getElementById('caretaker-select').value;
+      const doctorId = document.getElementById('doctor-select').value;
+      const messageDiv = document.getElementById('care-team-message');
+      
+      if (!caretakerId && !doctorId) {
+        messageDiv.textContent = 'Please select at least one caretaker or doctor.';
+        messageDiv.className = 'text-red-600';
+        messageDiv.classList.remove('hidden');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/patients/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            caretaker_id: caretakerId || null,
+            doctor_id: doctorId || null
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+          messageDiv.textContent = data.message || 'Care team updated successfully!';
+          messageDiv.className = 'text-green-600';
+        } else {
+          messageDiv.textContent = data.error || 'Error updating care team.';
+          messageDiv.className = 'text-red-600';
+        }
+        messageDiv.classList.remove('hidden');
+        
+        setTimeout(() => {
+          messageDiv.classList.add('hidden');
+        }, 5000);
+      } catch (err) {
+        console.error('Error saving care team:', err);
+        messageDiv.textContent = 'Error saving care team. Please try again.';
+        messageDiv.className = 'text-red-600';
+        messageDiv.classList.remove('hidden');
+      }
+    }
+  </script>
+</body>
+</html>
+

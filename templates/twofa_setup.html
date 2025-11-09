@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Set Up Two-Factor Authentication</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f0fdf4; }
+        .code-input {
+            font-size: 1.5rem;
+            letter-spacing: 0.5em;
+            text-align: center;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+        .recovery-key {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 1.25rem;
+            letter-spacing: 0.1em;
+            text-align: center;
+            font-weight: bold;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            position: relative;
+            overflow: hidden;
+        }
+        .recovery-key::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg, transparent, rgba(255,255,255,0.1), transparent);
+            transform: rotate(45deg);
+            animation: shine 3s infinite;
+        }
+        @keyframes shine {
+            0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+            100% { transform: translateX(100%) translateY(100%) rotate(45deg); }
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen bg-mint-light p-4">
+
+    <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl p-8 space-y-6 border border-gray-100">
+        
+        <!-- Header -->
+        <div class="text-center">
+            <div class="flex justify-center mb-4">
+                <div class="w-20 h-20 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center shadow-lg">
+                    <span class="text-4xl">🔐</span>
+                </div>
+            </div>
+            <h1 class="text-3xl font-extrabold text-indigo-600 tracking-wider mb-2">Enable 2FA</h1>
+            <p class="text-gray-600 text-sm">Add an extra layer of protection to your account</p>
+        </div>
+
+        <!-- Success Message -->
+        {% if success %}
+        <div class="p-4 bg-green-100 border-2 border-green-500 text-green-800 rounded-xl text-center">
+            <p class="font-bold text-lg">✅ {{ success }}</p>
+            {% if recovery_key and is_enabled %}
+            <p class="text-sm mt-2">Your 2FA is now active! Keep your recovery key safe.</p>
+            <a href="{{ url_for('dashboard') }}" class="inline-block mt-4 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-xl transition">
+                Go to Dashboard →
+            </a>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Error Message -->
+        {% if error %}
+        <div class="p-4 bg-red-100 border-2 border-red-500 text-red-700 rounded-xl text-center">
+            <p class="font-semibold">⚠️ {{ error }}</p>
+        </div>
+        {% endif %}
+
+        {% if not is_enabled %}
+        <!-- Step 1: Scan QR Code -->
+        <div class="bg-gradient-to-br from-blue-50 to-indigo-50 p-6 rounded-2xl border border-indigo-200">
+            <div class="flex items-start space-x-4">
+                <div class="flex-shrink-0 w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold">
+                    1
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-bold text-gray-800 mb-2">Scan QR Code</h3>
+                    <p class="text-sm text-gray-600 mb-4">Open your authenticator app (Google Authenticator, Authy, etc.) and scan this code:</p>
+                    
+                    <div class="flex justify-center">
+                        <div class="bg-white p-4 rounded-xl shadow-lg">
+                            <img src="{{ qr_code }}" alt="2FA QR Code" class="w-48 h-48">
+                        </div>
+                    </div>
+
+                    <div class="mt-4 bg-white p-4 rounded-lg border border-gray-200">
+                        <p class="text-xs text-gray-500 font-semibold mb-1">Can't scan? Enter manually:</p>
+                        <div class="flex items-center justify-between">
+                            <code class="text-indigo-600 font-mono text-sm break-all">{{ secret }}</code>
+                            <button onclick="copySecret()" class="ml-2 text-indigo-600 hover:text-indigo-700">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Save Recovery Key -->
+        <div class="bg-gradient-to-br from-orange-50 to-red-50 p-6 rounded-2xl border border-orange-200">
+            <div class="flex items-start space-x-4">
+                <div class="flex-shrink-0 w-10 h-10 bg-orange-600 rounded-full flex items-center justify-center text-white font-bold">
+                    2
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-bold text-gray-800 mb-2">⚠️ Save Your Recovery Key</h3>
+                    <p class="text-sm text-gray-600 mb-4">This is your <strong>only way</strong> to recover your account if you lose access to your authenticator app!</p>
+                    
+                    <div class="recovery-key" id="recovery-key-display">
+                        {{ recovery_key }}
+                    </div>
+
+                    <div class="mt-4 flex gap-2">
+                        <button onclick="copyRecoveryKey()" class="flex-1 bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-xl transition">
+                            📋 Copy Recovery Key
+                        </button>
+                        <button onclick="downloadRecoveryKey()" class="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-xl transition">
+                            💾 Download as File
+                        </button>
+                    </div>
+
+                    <p class="text-xs text-red-600 font-semibold mt-3 text-center">
+                        ⚠️ Store this key in a safe place! You won't see it again after setup.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Verify Code -->
+        <div class="bg-gradient-to-br from-green-50 to-emerald-50 p-6 rounded-2xl border border-green-200">
+            <div class="flex items-start space-x-4">
+                <div class="flex-shrink-0 w-10 h-10 bg-green-600 rounded-full flex items-center justify-center text-white font-bold">
+                    3
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-bold text-gray-800 mb-2">Verify Setup</h3>
+                    <p class="text-sm text-gray-600 mb-4">Enter the 6-digit code shown in your authenticator app:</p>
+                    
+                    <form method="POST" action="/setup_2fa" class="space-y-4" id="setup-form">
+                        <div class="relative">
+                            <input 
+                                type="text" 
+                                name="code" 
+                                id="code-input"
+                                maxlength="6" 
+                                pattern="[0-9]{6}"
+                                inputmode="numeric"
+                                required 
+                                placeholder="000000"
+                                class="code-input w-full px-6 py-3 border-2 border-gray-300 rounded-xl focus:border-green-500 focus:outline-none transition-all"
+                                autofocus
+                            >
+                            <div class="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">
+                                <svg id="check-icon" class="hidden h-6 w-6 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-center space-x-2" id="progress-dots">
+                            <span class="dot w-3 h-3 rounded-full bg-gray-300"></span>
+                            <span class="dot w-3 h-3 rounded-full bg-gray-300"></span>
+                            <span class="dot w-3 h-3 rounded-full bg-gray-300"></span>
+                            <span class="dot w-3 h-3 rounded-full bg-gray-300"></span>
+                            <span class="dot w-3 h-3 rounded-full bg-gray-300"></span>
+                            <span class="dot w-3 h-3 rounded-full bg-gray-300"></span>
+                        </div>
+
+                        <button type="submit" id="submit-btn" class="w-full py-3 px-4 rounded-xl text-lg font-bold text-white bg-green-600 hover:bg-green-700 shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            Verify & Enable 2FA
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        {% else %}
+        <!-- Already Enabled -->
+        <div class="text-center py-8">
+            <div class="inline-flex items-center justify-center w-24 h-24 bg-green-100 rounded-full mb-4">
+                <span class="text-5xl">✅</span>
+            </div>
+            <h3 class="text-2xl font-bold text-gray-800 mb-2">2FA is Already Enabled!</h3>
+            <p class="text-gray-600 mb-6">Your account is secured with two-factor authentication.</p>
+            <a href="{{ url_for('dashboard') }}" class="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-xl transition">
+                Go to Dashboard
+            </a>
+        </div>
+        {% endif %}
+
+        <div class="text-center pt-4 border-t border-gray-200">
+            <a href="{{ url_for('dashboard') }}" class="text-sm text-gray-500 hover:text-gray-700 hover:underline">
+                Skip for now (not recommended)
+            </a>
+        </div>
+    </div>
+
+    <script>
+        const secret = "{{ secret }}";
+        const recoveryKey = "{{ recovery_key }}";
+
+        function copySecret() {
+            navigator.clipboard.writeText(secret);
+            alert('Secret copied to clipboard!');
+        }
+
+        function copyRecoveryKey() {
+            navigator.clipboard.writeText(recoveryKey);
+            alert('✅ Recovery key copied to clipboard!\n\nPaste it into a secure location (password manager, encrypted note, etc.)');
+        }
+
+        function downloadRecoveryKey() {
+            const text = `CARE SYSTEM - 2FA Recovery Key\n\n` +
+                        `Date: ${new Date().toLocaleString()}\n` +
+                        `Recovery Key: ${recoveryKey}\n\n` +
+                        `IMPORTANT: Keep this key safe and secure!\n` +
+                        `You will need this if you lose access to your authenticator app.`;
+            
+            const blob = new Blob([text], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'CARE_2FA_Recovery_Key.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            
+            alert('✅ Recovery key downloaded!\n\nStore this file in a secure location.');
+        }
+
+        // Code input handling
+        const codeInput = document.getElementById('code-input');
+        const submitBtn = document.getElementById('submit-btn');
+        const checkIcon = document.getElementById('check-icon');
+        const progressDots = document.querySelectorAll('.dot');
+
+        if (codeInput) {
+            codeInput.addEventListener('input', (e) => {
+                let value = e.target.value.replace(/[^0-9]/g, '');
+                e.target.value = value;
+
+                progressDots.forEach((dot, index) => {
+                    if (index < value.length) {
+                        dot.classList.remove('bg-gray-300');
+                        dot.classList.add('bg-green-600');
+                    } else {
+                        dot.classList.remove('bg-green-600');
+                        dot.classList.add('bg-gray-300');
+                    }
+                });
+
+                if (value.length === 6) {
+                    checkIcon.classList.remove('hidden');
+                    submitBtn.disabled = false;
+                } else {
+                    checkIcon.classList.add('hidden');
+                    submitBtn.disabled = value.length < 6;
+                }
+            });
+
+            codeInput.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const pastedData = e.clipboardData.getData('text').replace(/[^0-9]/g, '').slice(0, 6);
+                codeInput.value = pastedData;
+                codeInput.dispatchEvent(new Event('input'));
+            });
+        }
+    </script>
+</body>
+</html>
