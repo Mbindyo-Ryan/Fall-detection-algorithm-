@@ -50,3 +50,4 @@ If database errors:
 - The script will create the database if it doesn't exist
 - Make sure you have write permissions
 
+

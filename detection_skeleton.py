@@ -723,6 +723,12 @@ class FallDetector:
 
         # Feature logger
         self.feature_logger = FeatureLogger(FEATURE_LOG_PATH)
+        
+        # NEW: CNN Validator - Frame buffer for validation
+        self.frame_buffer = deque(maxlen=60)  # Store last 60 frames (~2 seconds at 30 FPS)
+        self.cnn_validation_pending = False
+        self.cnn_validation_result = None
+        self.cnn_validation_confidence = 0.0
 
     def set_user_id(self, user_id):
         self.current_user_id = user_id
@@ -730,6 +736,65 @@ class FallDetector:
     def set_camera_source(self, source):
         self.camera_source = source
         print(f"🎥 Detector camera source set to: {source}")
+    
+    def preprocess_frame_for_cnn(self, frame, target_size=(224, 224)):
+        """Preprocess frame for CNN input"""
+        try:
+            # Resize frame
+            resized = cv2.resize(frame, target_size)
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+            # Normalize to [0, 1]
+            normalized = rgb_frame.astype('float32') / 255.0
+            return normalized
+        except Exception as e:
+            print(f"⚠️  Frame preprocessing error: {e}")
+            return None
+    
+    def validate_with_cnn(self, frames):
+        """
+        Validate fall detection using CNN validator.
+        Takes a list of frames and returns (detected, confidence)
+        """
+        global CNN_VALIDATOR, CNN_ENABLED
+        
+        if not CNN_ENABLED or CNN_VALIDATOR is None:
+            return None, 0.0
+        
+        if len(frames) == 0:
+            return None, 0.0
+        
+        try:
+            # Preprocess frames - use average frame for simplicity
+            # (For temporal CNN, you'd use sequence of frames)
+            processed_frames = []
+            for frame in frames[-16:]:  # Use last 16 frames
+                processed = self.preprocess_frame_for_cnn(frame)
+                if processed is not None:
+                    processed_frames.append(processed)
+            
+            if len(processed_frames) == 0:
+                return None, 0.0
+            
+            # Average frames to get single image (for 2D CNN)
+            # For 3D CNN, you'd stack frames as sequence
+            avg_frame = np.mean(processed_frames, axis=0)
+            
+            # Reshape for model input (batch_size, height, width, channels)
+            input_frame = np.expand_dims(avg_frame, axis=0)
+            
+            # Get CNN prediction
+            prediction = CNN_VALIDATOR.predict(input_frame, verbose=0)[0][0]
+            confidence = float(prediction)
+            
+            # CNN predicts probability of fall (0-1)
+            detected = confidence > 0.5
+            
+            return detected, confidence
+            
+        except Exception as e:
+            print(f"⚠️  CNN validation error: {e}")
+            return None, 0.0
 
     def calculate_fall_severity(self, details):
         """Calculate fall severity based on detection metrics"""
@@ -781,14 +846,22 @@ class FallDetector:
         self.last_fall_time = current_time
 
         try:
+            if isinstance(details, dict):
+                detail_data = details
+            elif isinstance(details, str):
+                detail_data = {"description": details}
+            else:
+                detail_data = {}
+
             ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-            severity = self.calculate_fall_severity(details)
+            severity = self.calculate_fall_severity(detail_data)
+            serialized_details = json.dumps(detail_data)
             
             c = DB_CONN.cursor()
             c.execute(
                 """INSERT INTO falls (user_id, timestamp, status, details, alert_sent, 
                    video_path, severity, location) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (self.current_user_id, ts, status, details, 0, video_path, severity, location)
+                (self.current_user_id, ts, status, serialized_details, 0, video_path, severity, location)
             )
             DB_CONN.commit()
             fall_id = c.lastrowid
@@ -1018,6 +1091,46 @@ class FallDetector:
                     print(f"⚠️  ML prediction error: {e}")
                     detection_details['ml_prediction'] = None
                     detection_details['ml_confidence'] = None
+            
+            # CNN VALIDATION (if pose-based detection is confident)
+            cnn_detected = None
+            cnn_confidence = 0.0
+            if fall_detected and fall_confidence > 0.5 and CNN_ENABLED:
+                # Use recent frames from buffer for CNN validation
+                if len(self.frame_buffer) >= 16:  # Need at least 16 frames
+                    cnn_detected, cnn_confidence = self.validate_with_cnn(list(self.frame_buffer))
+                    
+                    if cnn_detected is not None:
+                        detection_details['cnn_detected'] = int(cnn_detected)
+                        detection_details['cnn_confidence'] = round(cnn_confidence, 4)
+                        
+                        # Final decision: Combine pose-based + ML + CNN
+                        # Weight: 40% pose-based, 30% ML, 30% CNN
+                        if ml_confidence is not None and ml_confidence > 0:
+                            final_confidence = (
+                                0.4 * fall_confidence +
+                                0.3 * ml_confidence +
+                                0.3 * cnn_confidence
+                            )
+                        else:
+                            final_confidence = (
+                                0.6 * fall_confidence +
+                                0.4 * cnn_confidence
+                            )
+                        
+                        # CNN can override: if CNN says no fall with high confidence, reduce final confidence
+                        if not cnn_detected and cnn_confidence < 0.3:
+                            # CNN strongly disagrees - likely false positive
+                            final_confidence *= 0.5
+                            fall_detected = final_confidence > 0.5
+                            detection_details['cnn_filtered'] = True
+                        else:
+                            fall_detected = final_confidence > 0.5
+                            detection_details['cnn_filtered'] = False
+                        
+                        detection_details['final_confidence'] = round(final_confidence, 4)
+                        fall_confidence = final_confidence
+                        detection_details['fall_confidence'] = round(fall_confidence, 4)
 
             # Update display with tensor and ground info
             self.update_display(processed_frame, detection_details, fall_detected, tensor_points, ground_y)
@@ -1106,12 +1219,34 @@ class FallDetector:
             cv2.putText(frame, "COM", (com_x + 10, com_y),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
         
+        # NEW: CNN Validation Info
+        if details.get('cnn_confidence') is not None:
+            y_offset += 20
+            cnn_conf = details.get('cnn_confidence', 0)
+            cnn_color = (0, 255, 0) if details.get('cnn_detected') else (0, 165, 255)
+            cv2.putText(frame, f"CNN: {cnn_conf:.2f}", (20, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, cnn_color, 1)
+            if details.get('cnn_filtered'):
+                y_offset += 20
+                cv2.putText(frame, "CNN: Filtered FP", (20, y_offset),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
+        
+        # Final confidence if available
+        if details.get('final_confidence') is not None:
+            y_offset += 20
+            final_conf = details.get('final_confidence', 0)
+            cv2.putText(frame, f"Final: {final_conf:.2f}", (20, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        
         # User
         cv2.putText(frame, f"User: {self.current_user_id}", (width - 250, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
     def process_frame_for_fall(self, frame):
         """Main processing method with video recording"""
+        # Add frame to CNN validation buffer (before processing)
+        self.frame_buffer.append(frame.copy())
+        
         processed_frame, fall_detected, details = self.detect_fall_enhanced(frame)
         
         # Always add frame to video buffer (for pre-fall recording)
@@ -1137,7 +1272,12 @@ class FallDetector:
             if self.fall_counter >= FALL_CONFIRM_FRAMES:
                 # Start video recording if not already recording
                 if not self.recording_fall_id:
-                    fall_details = f"vel={details.get('velocity', 0):.4f}, angle={details.get('torso_angle', 0):.1f}, conf={details.get('fall_confidence', 0):.2f}"
+                    fall_details = details.copy() if isinstance(details, dict) else {}
+                    fall_details['summary'] = (
+                        f"vel={details.get('velocity', 0):.4f}, "
+                        f"angle={details.get('torso_angle', 0):.1f}, "
+                        f"conf={details.get('fall_confidence', 0):.2f}"
+                    )
                     
                     # Log fall to DB first (get fall ID)
                     fall_id = self.log_fall_to_db("CONFIRMED_FALL", fall_details, video_path=None, location=location)
@@ -1209,6 +1349,44 @@ def load_ml_model(model_path: str = None):
 # Try to load ML model on startup
 load_ml_model()
 
+# =========================================================
+# CNN VALIDATOR INTEGRATION
+# =========================================================
+CNN_VALIDATOR = None
+CNN_VALIDATOR_PATH = "models/cnn_validator.h5"
+CNN_ENABLED = False
+
+def load_cnn_validator(model_path: str = None):
+    """Load CNN validator model for fall detection"""
+    global CNN_VALIDATOR, CNN_ENABLED
+    if model_path is None:
+        model_path = CNN_VALIDATOR_PATH
+    
+    if not os.path.exists(model_path):
+        print(f"ℹ️  CNN validator not found at {model_path}. CNN validation disabled.")
+        return False
+    
+    try:
+        import tensorflow as tf
+        # Suppress TensorFlow warnings
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+        tf.get_logger().setLevel('ERROR')
+        
+        CNN_VALIDATOR = tf.keras.models.load_model(model_path)
+        CNN_ENABLED = True
+        print(f"✅ CNN validator loaded from {model_path}")
+        print(f"   Model input shape: {CNN_VALIDATOR.input_shape}")
+        return True
+    except ImportError:
+        print(f"⚠️  TensorFlow not installed. Install with: pip install tensorflow")
+        return False
+    except Exception as e:
+        print(f"⚠️  Failed to load CNN validator: {e}. CNN validation disabled.")
+        return False
+
+# Try to load CNN validator on startup
+load_cnn_validator()
+
 # Create global detector instance
 detector = FallDetector()
 
@@ -1257,6 +1435,12 @@ def generate_frames():
             frame_count += 1
             
             if not success:
+                # Attempt to rewind file-based sources so recorded clips can loop
+                if isinstance(detector.camera_source, str) and not detector.camera_source.isdigit():
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                    if total_frames > 0:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
                 print("⚠️ Failed to read frame")
                 time.sleep(0.1)
                 continue
@@ -1422,6 +1606,15 @@ class ThreadedCamera:
                     except queue.Empty:
                         pass
                 self.frame_queue.put(frame)
+            else:
+                # For file-based sources, rewind when we hit the end of the clip
+                if isinstance(self.source, str) and not self.source.isdigit():
+                    frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                    if frame_count > 0:
+                        self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        time.sleep(0.05)
+                        continue
+                time.sleep(0.05)
             
             time.sleep(0.001)  # Prevent CPU hogging
     

@@ -62,15 +62,21 @@
       <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
         <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
           <p class="text-sm font-semibold text-gray-500">Total Users</p>
-          <p id="total-users" class="text-4xl font-bold text-indigo-600 mt-1">0</p>
+          <p id="total-users" class="text-4xl font-bold text-indigo-600 mt-1">
+            <span class="text-sm text-gray-400">Loading...</span>
+          </p>
         </div>
         <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
           <p class="text-sm font-semibold text-gray-500">Total Falls</p>
-          <p id="total-falls" class="text-4xl font-bold text-red-600 mt-1">0</p>
+          <p id="total-falls" class="text-4xl font-bold text-red-600 mt-1">
+            <span class="text-sm text-gray-400">Loading...</span>
+          </p>
         </div>
         <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
           <p class="text-sm font-semibold text-gray-500">Active Patients</p>
-          <p id="active-patients" class="text-4xl font-bold text-green-600 mt-1">0</p>
+          <p id="active-patients" class="text-4xl font-bold text-green-600 mt-1">
+            <span class="text-sm text-gray-400">Loading...</span>
+          </p>
         </div>
         <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
           <p class="text-sm font-semibold text-gray-500">System Status</p>
@@ -185,17 +191,28 @@
           fetch('/api/admin/logs')
         ]);
         
+        // Check for HTTP errors
+        if (!usersRes.ok) {
+          const errorData = await usersRes.json().catch(() => ({}));
+          throw new Error(`Failed to fetch users: ${usersRes.status} ${errorData.error || usersRes.statusText}`);
+        }
+        
+        if (!logsRes.ok) {
+          const errorData = await logsRes.json().catch(() => ({}));
+          console.warn(`Failed to fetch logs: ${logsRes.status} ${errorData.error || logsRes.statusText}`);
+        }
+        
         const usersData = await usersRes.json();
-        const logsData = await logsRes.json();
+        const logsData = await logsRes.json().catch(() => ({logs: []}));
         
         // Update metrics
         const users = usersData.users || [];
         const patients = users.filter(u => u.role === 'patient');
         const totalFalls = users.reduce((sum, u) => sum + (u.fall_count || 0), 0);
         
-        document.getElementById('total-users').textContent = users.length;
-        document.getElementById('total-falls').textContent = totalFalls;
-        document.getElementById('active-patients').textContent = patients.length;
+        document.getElementById('total-users').textContent = users.length || 0;
+        document.getElementById('total-falls').textContent = totalFalls || 0;
+        document.getElementById('active-patients').textContent = patients.length || 0;
         
         // Show recent activity
         const recentLogs = (logsData.logs || []).slice(0, 10);
@@ -209,25 +226,35 @@
                 <div>
                   <p class="font-semibold">${log.type === 'fall' ? '⚠️ Fall Detected' : '📱 Alert Sent'}</p>
                   <p class="text-sm text-gray-600">${log.user || log.recipient || 'Unknown'}</p>
-                  <p class="text-xs text-gray-500">${log.timestamp}</p>
+                  <p class="text-xs text-gray-500">${log.timestamp || 'N/A'}</p>
                 </div>
-                <span class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs">${log.type}</span>
+                <span class="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs">${log.type || 'unknown'}</span>
               </div>
             </div>
           `).join('');
         }
       } catch (err) {
-        console.error('Error:', err);
+        console.error('Error fetching overview:', err);
+        document.getElementById('recent-activity').innerHTML = 
+          `<p class="text-center text-red-500">Error loading data: ${err.message}</p>`;
       }
     }
 
     async function fetchUsers() {
       try {
         const res = await fetch('/api/admin/users');
+        
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(`Failed to fetch users: ${res.status} ${errorData.error || res.statusText}`);
+        }
+        
         const data = await res.json();
         renderUsers(data.users || []);
       } catch (err) {
-        console.error('Error:', err);
+        console.error('Error fetching users:', err);
+        const tbody = document.getElementById('users-tbody');
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center p-4 text-red-500">Error: ${err.message}</td></tr>`;
       }
     }
 
@@ -265,10 +292,18 @@
     async function fetchLogs() {
       try {
         const res = await fetch('/api/admin/logs');
+        
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(`Failed to fetch logs: ${res.status} ${errorData.error || res.statusText}`);
+        }
+        
         const data = await res.json();
         renderLogs(data.logs || []);
       } catch (err) {
-        console.error('Error:', err);
+        console.error('Error fetching logs:', err);
+        const logsList = document.getElementById('logs-list');
+        logsList.innerHTML = `<p class="text-center text-red-500">Error loading logs: ${err.message}</p>`;
       }
     }
 

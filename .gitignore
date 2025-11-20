@@ -1,3 +1,28 @@
+.venv/
+env/
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+uploads/
+system_config.db
+test_results.json
+
+# Large datasets, models, and media assets stay local
+fall_videos/*
+!fall_videos/.gitkeep
+
+data/*
+!data/.gitkeep
+
+datasets/*
+!datasets/.gitkeep
+
+models/*
+!models/.gitkeep
+
+annotations/*
+!annotations/.gitkeep
 # Environment variables
 .env
 .env.local

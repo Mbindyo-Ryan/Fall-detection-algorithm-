@@ -34,6 +34,9 @@
       <button data-view="history" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
         <span class="text-xl mr-3">📜</span> My History
       </button>
+      <button data-view="cameras" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📷</span> My Cameras
+      </button>
       <button data-view="settings" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
         <span class="text-xl mr-3">⚙️</span> Settings
       </button>
@@ -103,6 +106,25 @@
       </header>
       <div id="history-list" class="space-y-4">
         <p class="text-center text-gray-500">Loading history...</p>
+      </div>
+    </div>
+
+    <!-- CAMERAS VIEW -->
+    <div id="cameras-view" class="view-content hidden-view">
+      <header class="mb-8 flex justify-between items-center">
+        <div>
+          <h2 class="text-4xl font-extrabold text-gray-900">My Cameras</h2>
+          <p class="text-gray-500 mt-1">Add and manage your monitoring cameras (IP address, URL, or device index).</p>
+        </div>
+        <button id="add-camera-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-xl transition">
+          ➕ Add Camera
+        </button>
+      </header>
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4">Configured Cameras</h3>
+        <div id="camera-list" class="space-y-4">
+          <p class="text-center text-gray-500">Loading cameras...</p>
+        </div>
       </div>
     </div>
 
@@ -182,6 +204,7 @@
       if (activeButton) activeButton.classList.add('bg-mint-light');
       
       if (target === 'history') fetchHistory();
+      if (target === 'cameras') fetchCameras();
       if (target === 'settings') loadCareTeamOptions();
     }
     
@@ -750,6 +773,145 @@
         messageDiv.classList.remove('hidden');
       }
     }
+
+    // Camera Management Functions
+    async function fetchCameras() {
+      try {
+        const res = await fetch('/api/user/cameras');
+        const data = await res.json();
+        renderCameras(data.cameras || []);
+      } catch (err) {
+        console.error('Error fetching cameras:', err);
+      }
+    }
+
+    function renderCameras(cameras) {
+      const list = document.getElementById('camera-list');
+      if (cameras.length === 0) {
+        list.innerHTML = '<p class="text-center text-gray-500">No cameras configured. Click "Add Camera" to get started.</p>';
+        return;
+      }
+      
+      list.innerHTML = cameras.map(cam => `
+        <div class="p-4 bg-gray-50 rounded-lg border-l-4 ${cam.is_active ? 'border-green-500' : 'border-gray-300'}">
+          <div class="flex justify-between items-start">
+            <div class="flex-1">
+              <p class="font-semibold text-lg">${cam.camera_name || 'Unnamed Camera'}</p>
+              <p class="text-sm text-gray-600 mt-1">Source: <code class="bg-gray-200 px-2 py-1 rounded">${cam.camera_url_or_index}</code></p>
+              ${cam.location ? `<p class="text-sm text-gray-600">Location: ${cam.location}</p>` : ''}
+              <p class="text-xs text-gray-500 mt-1">Created: ${cam.created_at || 'Unknown'}</p>
+            </div>
+            <div class="flex gap-2">
+              ${cam.is_active ? '<span class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs">Active</span>' : ''}
+              <button onclick="deleteCamera(${cam.id})" class="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700">
+                🗑️ Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function deleteCamera(camId) {
+      if (!confirm('Are you sure you want to delete this camera?')) return;
+      
+      try {
+        const res = await fetch('/api/user/cameras', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: camId })
+        });
+        
+        if (res.ok) {
+          alert('Camera deleted successfully');
+          fetchCameras();
+        } else {
+          alert('Error deleting camera');
+        }
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error deleting camera');
+      }
+    }
+
+    // Add Camera Modal
+    const addCameraBtn = document.getElementById('add-camera-btn');
+    const addCameraModal = document.createElement('div');
+    addCameraModal.id = 'add-camera-modal';
+    addCameraModal.className = 'hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+    addCameraModal.innerHTML = `
+      <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-xl font-semibold">Add New Camera</h3>
+          <button onclick="closeCameraModal()" class="text-2xl">&times;</button>
+        </div>
+        <form id="add-camera-form" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Camera Name</label>
+            <input type="text" id="camera-name" required class="w-full border rounded-lg px-3 py-2" placeholder="e.g., Living Room Camera">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Camera Source</label>
+            <input type="text" id="camera-source" required class="w-full border rounded-lg px-3 py-2" placeholder="0, 1, or http://192.168.1.100:8080/video">
+            <p class="text-xs text-gray-500 mt-1">Enter device index (0, 1, 2...) or IP address/URL</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Location (Optional)</label>
+            <input type="text" id="camera-location" class="w-full border rounded-lg px-3 py-2" placeholder="e.g., Living Room">
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="flex-1 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
+              ➕ Add Camera
+            </button>
+            <button type="button" onclick="closeCameraModal()" class="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    `;
+    document.body.appendChild(addCameraModal);
+
+    addCameraBtn.addEventListener('click', () => {
+      addCameraModal.classList.remove('hidden');
+    });
+
+    function closeCameraModal() {
+      addCameraModal.classList.add('hidden');
+      document.getElementById('add-camera-form').reset();
+    }
+
+    document.getElementById('add-camera-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('camera-name').value;
+      const source = document.getElementById('camera-source').value;
+      const location = document.getElementById('camera-location').value;
+      
+      try {
+        const res = await fetch('/api/user/cameras', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            camera_name: name,
+            camera_url_or_index: source,
+            location: location
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+          alert('Camera added successfully!');
+          closeCameraModal();
+          fetchCameras();
+        } else {
+          alert('Error: ' + (data.error || 'Failed to add camera'));
+        }
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error adding camera');
+      }
+    });
   </script>
 </body>
 </html>

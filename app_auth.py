@@ -113,6 +113,34 @@ def init_database():
         # Update existing users without role to 'patient'
         c.execute("UPDATE users SET role = 'patient' WHERE role IS NULL")
         
+        # Falls table (shared with detection module)
+        c.execute('''CREATE TABLE IF NOT EXISTS falls (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        details TEXT,
+                        alert_sent INTEGER DEFAULT 0,
+                        video_path TEXT,
+                        severity TEXT DEFAULT 'moderate',
+                        location TEXT,
+                        response_time_seconds REAL,
+                        FOREIGN KEY(user_id) REFERENCES users(id)
+                    )''')
+
+        # Ensure new fall columns exist (idempotent migrations)
+        for column, ddl in [
+            ("video_path", "ALTER TABLE falls ADD COLUMN video_path TEXT"),
+            ("severity", "ALTER TABLE falls ADD COLUMN severity TEXT DEFAULT 'moderate'"),
+            ("location", "ALTER TABLE falls ADD COLUMN location TEXT"),
+            ("response_time_seconds", "ALTER TABLE falls ADD COLUMN response_time_seconds REAL")
+        ]:
+            try:
+                c.execute(ddl)
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    print(f"⚠️ Error adding column '{column}' to falls table: {e}")
+
         # Patient-Caretaker relationships
         c.execute('''CREATE TABLE IF NOT EXISTS patient_caretaker (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +234,19 @@ def init_database():
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY (file_id) REFERENCES fall_files (id),
                         FOREIGN KEY (doctor_id) REFERENCES users (id)
+                    )''')
+
+        # Alert logs table (used across dashboards)
+        c.execute('''CREATE TABLE IF NOT EXISTS alert_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        fall_id INTEGER,
+                        recipient_id TEXT,
+                        alert_type TEXT,
+                        success INTEGER,
+                        details TEXT,
+                        timestamp TEXT,
+                        FOREIGN KEY (fall_id) REFERENCES falls (id),
+                        FOREIGN KEY (recipient_id) REFERENCES users (id)
                     )''')
 
         conn.commit()
@@ -2038,44 +2079,93 @@ def api_admin_users():
     
     conn = get_db_connection()
     if not conn:
-        return jsonify({"users": []})
+        return jsonify({"error": "Database connection failed", "users": []}), 500
     
     try:
         c = conn.cursor()
-        c.execute("""
+        
+        # Check if required tables exist
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users', 'falls', 'patient_caretaker', 'patient_doctor')")
+        existing_tables = {row[0] for row in c.fetchall()}
+        
+        if 'users' not in existing_tables:
+            return jsonify({"error": "Users table does not exist", "users": []}), 500
+        
+        # Build query based on available tables
+        query = """
             SELECT 
-                u.id, u.name, u.email, u.phone, u.role, u.created_at,
-                COUNT(DISTINCT f.id) as fall_count,
-                MAX(f.timestamp) as last_fall,
-                COUNT(DISTINCT pc.caretaker_id) as caretaker_count,
-                COUNT(DISTINCT pd.doctor_id) as doctor_count
+                u.id, u.name, u.email, u.phone, u.role, u.created_at
+        """
+        
+        # Add fall count if falls table exists
+        if 'falls' in existing_tables:
+            query += ", COUNT(DISTINCT f.id) as fall_count, MAX(f.timestamp) as last_fall"
+        else:
+            query += ", 0 as fall_count, NULL as last_fall"
+        
+        # Add caretaker count if table exists
+        if 'patient_caretaker' in existing_tables:
+            query += ", COUNT(DISTINCT pc.caretaker_id) as caretaker_count"
+        else:
+            query += ", 0 as caretaker_count"
+        
+        # Add doctor count if table exists
+        if 'patient_doctor' in existing_tables:
+            query += ", COUNT(DISTINCT pd.doctor_id) as doctor_count"
+        else:
+            query += ", 0 as doctor_count"
+        
+        query += """
             FROM users u
-            LEFT JOIN falls f ON u.id = f.user_id
-            LEFT JOIN patient_caretaker pc ON u.id = pc.patient_id AND pc.is_active = 1
-            LEFT JOIN patient_doctor pd ON u.id = pd.patient_id AND pd.is_active = 1
+        """
+        
+        # Add LEFT JOINs only if tables exist
+        if 'falls' in existing_tables:
+            query += " LEFT JOIN falls f ON u.id = f.user_id"
+        if 'patient_caretaker' in existing_tables:
+            query += " LEFT JOIN patient_caretaker pc ON u.id = pc.patient_id AND pc.is_active = 1"
+        if 'patient_doctor' in existing_tables:
+            query += " LEFT JOIN patient_doctor pd ON u.id = pd.patient_id AND pd.is_active = 1"
+        
+        query += """
             GROUP BY u.id, u.name, u.email, u.phone, u.role, u.created_at
             ORDER BY u.created_at DESC
-        """)
+        """
+        
+        c.execute(query)
         
         users = []
         for row in c.fetchall():
+            # Handle sqlite3.Row objects (use dictionary-style access, not .get())
+            last_fall = row['last_fall'] if 'last_fall' in row.keys() and row['last_fall'] else 'Never'
+            fall_count = row['fall_count'] if 'fall_count' in row.keys() else 0
+            caretaker_count = row['caretaker_count'] if 'caretaker_count' in row.keys() else 0
+            doctor_count = row['doctor_count'] if 'doctor_count' in row.keys() else 0
+            
             users.append({
                 "id": row['id'],
                 "name": row['name'],
                 "email": row['email'] or 'N/A',
                 "phone": row['phone'] or 'N/A',
-                "role": row['role'],
-                "created_at": row['created_at'],
-                "fall_count": row['fall_count'] or 0,
-                "last_fall": row['last_fall'] or 'Never',
-                "caretaker_count": row['caretaker_count'] or 0,
-                "doctor_count": row['doctor_count'] or 0
+                "role": row['role'] or 'patient',
+                "created_at": row['created_at'] or 'N/A',
+                "fall_count": fall_count,
+                "last_fall": last_fall,
+                "caretaker_count": caretaker_count,
+                "doctor_count": doctor_count
             })
         
         return jsonify({"users": users})
     except sqlite3.Error as e:
-        print(f"Error fetching admin users: {e}")
-        return jsonify({"users": []})
+        print(f"❌ Error fetching admin users: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "users": []}), 500
+    except Exception as e:
+        print(f"❌ Unexpected error in api_admin_users: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "users": []}), 500
     finally:
         conn.close()
 
@@ -2091,45 +2181,61 @@ def api_admin_logs():
     # Get recent falls, alerts, and system activity
     conn = get_db_connection()
     if not conn:
-        return jsonify({"logs": []})
+        return jsonify({"error": "Database connection failed", "logs": []}), 500
     
     try:
         c = conn.cursor()
+        all_logs = []
         
-        # Get recent falls
-        c.execute("""
-            SELECT f.id, f.timestamp, f.status, f.severity, u.name as user_name, f.location
-            FROM falls f
-            LEFT JOIN users u ON f.user_id = u.id
-            ORDER BY f.timestamp DESC
-            LIMIT 100
-        """)
-        falls = [{"type": "fall", "id": row['id'], "timestamp": row['timestamp'], 
-                 "status": row['status'], "severity": row['severity'], 
-                 "user": row['user_name'], "location": row['location']} 
-                for row in c.fetchall()]
+        # Get recent falls (check if table exists)
+        try:
+            c.execute("""
+                SELECT f.id, f.timestamp, f.status, f.severity, u.name as user_name, f.location
+                FROM falls f
+                LEFT JOIN users u ON f.user_id = u.id
+                ORDER BY f.timestamp DESC
+                LIMIT 100
+            """)
+            falls = [{"type": "fall", "id": row['id'], "timestamp": row['timestamp'] or 'N/A', 
+                     "status": row['status'] or 'unknown', "severity": row['severity'] or 'moderate', 
+                     "user": row['user_name'] or 'Unknown', "location": row['location'] or 'Unknown'} 
+                    for row in c.fetchall()]
+            all_logs.extend(falls)
+        except sqlite3.OperationalError as e:
+            print(f"⚠️ Falls table not accessible: {e}")
+            # Falls table might not exist yet, continue with alerts only
         
-        # Get recent alerts
-        c.execute("""
-            SELECT al.id, al.timestamp, al.alert_type, al.success, al.details, u.name as recipient_name
-            FROM alert_logs al
-            LEFT JOIN users u ON al.recipient_id = u.id
-            ORDER BY al.timestamp DESC
-            LIMIT 100
-        """)
-        alerts = [{"type": "alert", "id": row['id'], "timestamp": row['timestamp'],
-                  "alert_type": row['alert_type'], "success": bool(row['success']),
-                  "details": row['details'], "recipient": row['recipient_name']}
-                 for row in c.fetchall()]
+        # Get recent alerts (check if table exists)
+        try:
+            c.execute("""
+                SELECT al.id, al.timestamp, al.alert_type, al.success, al.details, u.name as recipient_name
+                FROM alert_logs al
+                LEFT JOIN users u ON al.recipient_id = u.id
+                ORDER BY al.timestamp DESC
+                LIMIT 100
+            """)
+            alerts = [{"type": "alert", "id": row['id'], "timestamp": row['timestamp'] or 'N/A',
+                      "alert_type": row['alert_type'] or 'unknown', "success": bool(row['success']),
+                      "details": row['details'] or '', "recipient": row['recipient_name'] or 'Unknown'}
+                     for row in c.fetchall()]
+            all_logs.extend(alerts)
+        except sqlite3.OperationalError as e:
+            print(f"⚠️ Alert_logs table not accessible: {e}")
+            # Alert_logs table might not exist yet
         
-        # Combine and sort by timestamp
-        all_logs = falls + alerts
-        all_logs.sort(key=lambda x: x['timestamp'], reverse=True)
+        # Combine and sort by timestamp (handle None timestamps)
+        def safe_timestamp(log):
+            ts = log.get('timestamp', '')
+            return ts if ts and ts != 'N/A' else '1970-01-01 00:00:00'
+        
+        all_logs.sort(key=safe_timestamp, reverse=True)
         
         return jsonify({"logs": all_logs[:200]})  # Return top 200
-    except sqlite3.Error as e:
-        print(f"Error fetching admin logs: {e}")
-        return jsonify({"logs": []})
+    except Exception as e:
+        print(f"❌ Error fetching admin logs: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "logs": []}), 500
     finally:
         conn.close()
 
