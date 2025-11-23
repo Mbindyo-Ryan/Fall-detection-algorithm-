@@ -384,35 +384,38 @@
 
     // Falls API
     async function fetchFalls() {
-      // Hard-coded recent fall events for presentation
-      const events = [
-        {
-          id: 1,
-          timestamp: "2025-11-03 09:15:00",
-          status: "CONFIRMED_FALL",
-          user_name: "Mulwa Mutie",
-          location: "Living Room",
-          details: "Fall detected with high confidence"
-        },
-        {
-          id: 2,
-          timestamp: "2025-11-02 18:42:00",
-          status: "CONFIRMED_FALL",
-          user_name: "John Owiny",
-          location: "Bedroom",
-          details: "Fall detected, moderate confidence"
-        },
-        {
-          id: 3,
-          timestamp: "2025-11-02 14:10:00",
-          status: "NORMAL",
-          user_name: "John Doe",
-          location: "Kitchen",
-          details: "No fall detected"
-        }
-      ];
-      renderEventFeed(events);
-      document.getElementById('total-falls').textContent = events.filter(e => e.status === 'CONFIRMED_FALL').length;
+      try {
+        const res = await fetch('/api/falls');
+        const data = await res.json();
+        const events = data.falls || [];
+        
+        console.log('📊 Fetched falls:', events.length, 'events');
+        console.log('📊 Falls data:', events);
+        
+        // Parse details if it's a JSON string
+        events.forEach(ev => {
+          if (ev.details && typeof ev.details === 'string') {
+            try {
+              const parsed = JSON.parse(ev.details);
+              // If it has a summary field, use it; otherwise use the full details
+              ev.details = parsed.summary || parsed.description || ev.details;
+            } catch (e) {
+              // If parsing fails, keep the original string
+              console.log('⚠️ Could not parse details for event:', ev.id, ev.details);
+            }
+          }
+        });
+        
+        renderEventFeed(events);
+        const confirmedFalls = events.filter(e => e.status === 'CONFIRMED_FALL');
+        document.getElementById('total-falls').textContent = confirmedFalls.length;
+        console.log('✅ Rendered', confirmedFalls.length, 'confirmed falls');
+      } catch (err) {
+        console.error('❌ Error fetching falls:', err);
+        // Show error in the feed
+        const feed = document.getElementById('event-feed');
+        feed.innerHTML = '<p class="text-center text-red-500">Error loading events. Please refresh.</p>';
+      }
     }
 
     function renderEventFeed(events) {
@@ -462,8 +465,7 @@
         grid.insertAdjacentHTML('beforeend', `
           <div class="bg-white p-6 rounded-2xl shadow-lg border-t-4 ${statusColor}">
             <p class="text-xl font-bold">${u.name}</p>
-            <p class="text-sm text-gray-500">Phone: ${u.phone}</p>
-            <p class="text-sm text-gray-500">Email: ${u.email}</p>
+            <p class="text-sm text-gray-500">📧 ${u.email || 'No email'}</p>
           </div>`);
       });
     }
@@ -640,7 +642,8 @@
       fetchCameras();
     }
 
-    setInterval(fetchFalls, 5000);
+    // Auto-refresh falls every 3 seconds for real-time updates
+    setInterval(fetchFalls, 3000);
     setInterval(fetchUsers, 15000);
     
     document.addEventListener('DOMContentLoaded', initialLoad);

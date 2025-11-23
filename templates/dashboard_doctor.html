@@ -348,7 +348,7 @@
               </span>
             </div>
             <p class="text-sm text-gray-500">📧 ${p.email}</p>
-            <p class="text-sm text-gray-500">📞 ${p.phone}</p>
+            <p class="text-sm text-gray-500">📧 ${p.email || 'No email'}</p>
             <p class="text-sm text-gray-500 mt-2">Last Fall: ${p.last_fall || 'Never'}</p>
             <button onclick="viewPatientFalls('${p.id}')" class="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg">
               View Falls

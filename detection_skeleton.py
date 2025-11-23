@@ -15,8 +15,8 @@ import csv
 # =========================================================
 # CONFIGURATION
 # =========================================================
-FALL_CONFIRM_FRAMES = 8
-FALL_THRESHOLD_VELOCITY = 0.02
+FALL_CONFIRM_FRAMES = 3  # Reduced from 5 for faster detection
+FALL_THRESHOLD_VELOCITY = 0.01  # Reduced from 0.015 for more sensitive detection
 TORSO_FLATNESS_THRESHOLD = 0.1
 POSE_CONFIDENCE = 0.6
 FALL_LOG_COOLDOWN = 10
@@ -697,12 +697,12 @@ class FallDetector:
         self.is_running = True
         self.normal_height = None
         
-        # Enhanced detection parameters
+        # Enhanced detection parameters (more sensitive)
         self.fall_indicators = {
             'velocity_threshold': FALL_THRESHOLD_VELOCITY,
-            'torso_angle_threshold': 25,
-            'height_ratio_threshold': 0.6,
-            'ground_contact_threshold': 0.8,
+            'torso_angle_threshold': 30,  # Increased from 25 (more sensitive)
+            'height_ratio_threshold': 0.65,  # Increased from 0.6 (more sensitive)
+            'ground_contact_threshold': 0.75,  # Decreased from 0.8 (more sensitive)
         }
         
         self.performance_monitor = AdvancedPerformanceMonitor()
@@ -834,16 +834,70 @@ class FallDetector:
             return 'mild'
     
     def log_fall_to_db(self, status, details, video_path=None, location=None):
-        global DB_CONN
-        if not DB_CONN:
-            print("❌ Error logging fall: Database connection not established.")
-            return
-
+        """Thread-safe fall logging using database manager (supports SQLite and PostgreSQL)"""
+        try:
+            from db_manager import get_db_connection, close_db_connection
+        except ImportError:
+            # Fallback to SQLite if db_manager not available
+            import sqlite3
+            global DB_PATH
+            if not DB_PATH:
+                print("❌ Error logging fall: Database path not configured.")
+                return None
+            
+            current_time = time.time()
+            time_since_last_fall = current_time - self.last_fall_time
+            if current_time < self.last_fall_time + FALL_LOG_COOLDOWN:
+                print(f"⏸️  Fall logging cooldown active: {time_since_last_fall:.1f}s / {FALL_LOG_COOLDOWN}s (user: {self.current_user_id})")
+                return None
+            
+            self.last_fall_time = current_time
+            print(f"🔄 Cooldown passed ({time_since_last_fall:.1f}s), proceeding to log fall for user: {self.current_user_id}")
+            
+            conn = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                if isinstance(details, dict):
+                    detail_data = details
+                elif isinstance(details, str):
+                    detail_data = {"description": details}
+                else:
+                    detail_data = {}
+                
+                ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                severity = self.calculate_fall_severity(detail_data)
+                serialized_details = json.dumps(detail_data)
+                
+                c = conn.cursor()
+                c.execute(
+                    """INSERT INTO falls (user_id, timestamp, status, details, alert_sent, 
+                       video_path, severity, location) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (self.current_user_id, ts, status, serialized_details, 0, video_path, severity, location)
+                )
+                conn.commit()
+                fall_id = c.lastrowid
+                
+                print(f"✅ Logged fall at {ts} for user {self.current_user_id}: {status} | Severity: {severity} | Fall ID: {fall_id}")
+                self.fall_logged = True
+                return fall_id
+            finally:
+                conn.close()
+            return None
+        
+        # Use db_manager (preferred method)
         current_time = time.time()
+        time_since_last_fall = current_time - self.last_fall_time
         if current_time < self.last_fall_time + FALL_LOG_COOLDOWN:
-            return
+            print(f"⏸️  Fall logging cooldown active: {time_since_last_fall:.1f}s / {FALL_LOG_COOLDOWN}s (user: {self.current_user_id})")
+            return None
 
         self.last_fall_time = current_time
+        print(f"🔄 Cooldown passed ({time_since_last_fall:.1f}s), proceeding to log fall for user: {self.current_user_id}")
+
+        conn = get_db_connection()
+        if not conn:
+            print("❌ Error logging fall: Could not get database connection.")
+            return None
 
         try:
             if isinstance(details, dict):
@@ -857,24 +911,32 @@ class FallDetector:
             severity = self.calculate_fall_severity(detail_data)
             serialized_details = json.dumps(detail_data)
             
-            c = DB_CONN.cursor()
-            c.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 """INSERT INTO falls (user_id, timestamp, status, details, alert_sent, 
                    video_path, severity, location) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (self.current_user_id, ts, status, serialized_details, 0, video_path, severity, location)
             )
-            DB_CONN.commit()
-            fall_id = c.lastrowid
+            conn.commit()
             
-            print(f"✅ Logged fall at {ts} for user {self.current_user_id}: {status} | Severity: {severity} | {details}")
+            # Get last inserted ID (works with both SQLite and PostgreSQL)
+            if hasattr(cursor, 'lastrowid'):
+                fall_id = cursor.lastrowid
+            else:
+                # PostgreSQL - need to fetch the ID
+                cursor.execute("SELECT LASTVAL()")
+                fall_id = cursor.fetchone()[0]
+            
+            print(f"✅ Logged fall at {ts} for user {self.current_user_id}: {status} | Severity: {severity} | Fall ID: {fall_id}")
+            print(f"   Details: {serialized_details[:200]}...")
             self.fall_logged = True
             
             # Send alerts to caregivers and doctors
             try:
                 from alert_service import send_fall_alerts
                 # Get patient name
-                c.execute("SELECT name FROM users WHERE id = ?", (self.current_user_id,))
-                user_row = c.fetchone()
+                cursor.execute("SELECT name FROM users WHERE id = ?", (self.current_user_id,))
+                user_row = cursor.fetchone()
                 patient_name = user_row[0] if user_row else "Patient"
                 
                 alert_result = send_fall_alerts(
@@ -887,9 +949,9 @@ class FallDetector:
                 
                 # Update alert_sent flag
                 if alert_result.get('sent'):
-                    c.execute("UPDATE falls SET alert_sent = 1 WHERE id = ?", (fall_id,))
-                    DB_CONN.commit()
-                    print(f"📱 Alerts sent: {alert_result.get('sms_sent', 0)} SMS, {alert_result.get('calls_made', 0)} calls")
+                    cursor.execute("UPDATE falls SET alert_sent = 1 WHERE id = ?", (fall_id,))
+                    conn.commit()
+                    print(f"📧 Alerts sent: {alert_result.get('emails_sent', 0)} emails")
                 else:
                     print(f"⚠️  No alerts sent: {alert_result.get('reason', 'unknown')}")
             except ImportError:
@@ -898,9 +960,17 @@ class FallDetector:
                 print(f"⚠️  Error sending alerts: {e}")
             
             return fall_id  # Return fall ID for video association
-        except sqlite3.Error as e:
+        except Exception as e:
             print(f"❌ Error logging fall to DB: {e}")
+            import traceback
+            traceback.print_exc()
+            if conn:
+                conn.rollback()
             return None
+        finally:
+            if cursor:
+                cursor.close()
+            close_db_connection(conn)
 
     def calculate_torso_angle(self, landmarks):
         """Calculate torso angle relative to vertical"""
@@ -1036,7 +1106,7 @@ class FallDetector:
             )
 
             fall_confidence = fall_score
-            fall_detected = fall_score > 0.6
+            fall_detected = fall_score > 0.4  # Reduced from 0.5 for more sensitive detection
             
             # Create detection details dictionary
             detection_details = {
@@ -1139,6 +1209,12 @@ class FallDetector:
             processed_frame = frame.copy()
             cv2.putText(processed_frame, "No Person Detected", (20, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            # Debug: Log when no pose is detected (less frequently)
+            if not hasattr(self, '_no_pose_log_counter'):
+                self._no_pose_log_counter = 0
+            self._no_pose_log_counter += 1
+            if self._no_pose_log_counter % 300 == 0:  # Every ~10 seconds at 30fps
+                print(f"⚠️  No person detected in frame (user_id: {self.current_user_id}) - check camera/video feed")
 
         detection_time = time.time() - start_time
 
@@ -1244,6 +1320,13 @@ class FallDetector:
 
     def process_frame_for_fall(self, frame):
         """Main processing method with video recording"""
+        # Debug: Log user_id periodically (every 100 frames to avoid spam)
+        if not hasattr(self, '_frame_debug_counter'):
+            self._frame_debug_counter = 0
+        self._frame_debug_counter += 1
+        if self._frame_debug_counter % 300 == 0:  # Every ~10 seconds at 30fps
+            print(f"🔍 Processing frames - user_id: {self.current_user_id}, fall_counter: {self.fall_counter}, fall_logged: {self.fall_logged}")
+        
         # Add frame to CNN validation buffer (before processing)
         self.frame_buffer.append(frame.copy())
         
@@ -1269,7 +1352,11 @@ class FallDetector:
         # Fall confirmation logic
         if fall_detected:
             self.fall_counter += 1
+            # Log more frequently for debugging
+            if self.fall_counter % 5 == 0:  # Log every 5 frames
+                print(f"🔍 Fall detected: counter={self.fall_counter}/{FALL_CONFIRM_FRAMES}, user={self.current_user_id}, conf={details.get('fall_confidence', 0):.2f}, vel={details.get('velocity', 0):.4f}, angle={details.get('torso_angle', 0):.1f}°")
             if self.fall_counter >= FALL_CONFIRM_FRAMES:
+                print(f"✅ Fall confirmed! Counter reached {self.fall_counter}, user={self.current_user_id}, attempting to log...")
                 # Start video recording if not already recording
                 if not self.recording_fall_id:
                     fall_details = details.copy() if isinstance(details, dict) else {}
@@ -1280,9 +1367,13 @@ class FallDetector:
                     )
                     
                     # Log fall to DB first (get fall ID)
+                    print(f"📝 Attempting to log fall to DB for user: {self.current_user_id}, location: {location}")
                     fall_id = self.log_fall_to_db("CONFIRMED_FALL", fall_details, video_path=None, location=location)
                     
                     if fall_id:
+                        print(f"✅ Fall successfully logged with ID: {fall_id}")
+                    else:
+                        print(f"⚠️  Fall logging returned None (likely cooldown or DB error)")
                         # Start video recording
                         video_path = self.video_recorder.start_recording(fall_id, self.current_user_id)
                         if video_path:
@@ -1314,9 +1405,16 @@ class FallDetector:
                     self.video_recorder.finish_recording()
                     self.recording_fall_id = None
                     self.recording_start_time = None
+                    print(f"🎥 Finished recording fall video")
             else:
+                # Reset fall counter when no fall detected
+                if self.fall_counter > 0:
+                    if self.fall_counter % 20 == 0:  # Log occasionally
+                        print(f"🔄 Resetting fall_counter from {self.fall_counter} to 0 (no fall detected)")
                 self.fall_counter = 0
                 if time.time() > self.last_fall_time + FALL_LOG_COOLDOWN:
+                    if self.fall_logged:
+                        print(f"✅ Cooldown passed, resetting fall_logged flag (user: {self.current_user_id})")
                     self.fall_logged = False
 
         return processed_frame

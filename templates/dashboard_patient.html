@@ -165,6 +165,17 @@
           <h3 class="text-xl font-semibold text-gray-800 border-b pb-2">My Care Team</h3>
           <p class="text-sm text-gray-600 mb-4">Select your caretaker and doctor from the system.</p>
           
+          <!-- Current Care Team Display -->
+          <div id="current-care-team" class="mb-4 p-4 bg-gray-50 rounded-lg space-y-3">
+            <h4 class="text-sm font-semibold text-gray-700">Currently Assigned:</h4>
+            <div id="current-caretakers" class="text-sm text-gray-600">
+              <span class="font-medium">Caretakers:</span> <span id="caretakers-list">Loading...</span>
+            </div>
+            <div id="current-doctors" class="text-sm text-gray-600">
+              <span class="font-medium">Doctors:</span> <span id="doctors-list">Loading...</span>
+            </div>
+          </div>
+          
           <div class="space-y-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-2">Select Caretaker</label>
@@ -222,33 +233,61 @@
       try {
         const res = await fetch('/api/falls');
         const data = await res.json();
+        const events = data.falls || [];
+        
+        console.log('📊 Patient dashboard: Fetched', events.length, 'falls');
+        console.log('📊 Falls data:', events);
+        
+        // Parse details if it's a JSON string
+        events.forEach(ev => {
+          if (ev.details && typeof ev.details === 'string') {
+            try {
+              const parsed = JSON.parse(ev.details);
+              // If it has a summary field, use it; otherwise use the full details
+              ev.details = parsed.summary || parsed.description || ev.details;
+            } catch (e) {
+              // If parsing fails, keep the original string
+              console.log('⚠️ Could not parse details for event:', ev.id, ev.details);
+            }
+          }
+        });
+        
         const today = new Date().toISOString().split('T')[0];
-        const todayFalls = data.falls.filter(f => f.timestamp.startsWith(today));
+        const todayFalls = events.filter(f => f.timestamp && f.timestamp.startsWith(today));
         document.getElementById('my-falls-today').textContent = todayFalls.length;
         
-        if (data.falls.length > 0) {
-          const lastFall = data.falls[0];
-          document.getElementById('last-fall-time').textContent = lastFall.timestamp.split(' ')[1] || 'Unknown';
+        if (events.length > 0) {
+          const lastFall = events[0];
+          document.getElementById('last-fall-time').textContent = lastFall.timestamp ? lastFall.timestamp.split(' ')[1] : 'Unknown';
         }
         
-        renderMyEvents(data.falls.slice(0, 10));
+        console.log('✅ Rendering', events.length, 'events');
+        renderMyEvents(events.slice(0, 10));
       } catch (err) {
-        console.error('Error:', err);
+        console.error('❌ Error fetching stats:', err);
       }
     }
 
     async function renderMyEvents(events) {
       const feed = document.getElementById('my-event-feed');
+      if (!feed) {
+        console.error('❌ Element my-event-feed not found!');
+        return;
+      }
+      
       feed.innerHTML = '';
       if (events.length === 0) {
         feed.innerHTML = '<p class="text-center text-gray-500">No recent events. Stay safe! 🎉</p>';
+        console.log('ℹ️ No events to render');
         return;
       }
+      
+      console.log('🎨 Rendering', events.length, 'events to feed');
       
       for (const ev of events) {
         const severityClass = `severity-${ev.severity || 'moderate'}`;
         
-        // Fetch doctor remarks for this fall
+        // Fetch doctor remarks for this fall (non-blocking, can fail silently)
         let remarksData = null;
         try {
           const remarksRes = await fetch(`/api/falls/${ev.id}/remarks`);
@@ -256,19 +295,35 @@
             remarksData = await remarksRes.json();
           }
         } catch (err) {
-          console.error('Error fetching remarks:', err);
+          // Silently fail - remarks are optional
+          console.log('⚠️ Could not fetch remarks for fall', ev.id);
         }
         
         const hasReview = remarksData && remarksData.review;
         const hasFiles = remarksData && remarksData.files && remarksData.files.length > 0;
         
+        console.log('📝 Rendering fall:', ev.id, 'status:', ev.status, 'timestamp:', ev.timestamp);
+        
+        // Escape HTML in details to prevent XSS and rendering issues
+        const escapeHtml = (text) => {
+          if (!text) return 'No details available';
+          const div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        };
+        
+        const safeDetails = escapeHtml(ev.details);
+        const safeTimestamp = ev.timestamp || 'Unknown time';
+        const safeLocation = ev.location || 'Unknown Location';
+        const safeSeverity = ev.severity || 'moderate';
+        
         feed.insertAdjacentHTML('beforeend', `
           <div class="p-4 rounded-xl border-l-4 ${severityClass} mb-4">
             <div class="flex justify-between items-start mb-3">
               <div class="flex-1">
-                <p class="font-semibold">Fall Detected - ${ev.severity || 'moderate'}</p>
-                <p class="text-xs text-gray-600">${ev.timestamp} • ${ev.location || 'Unknown Location'}</p>
-                <p class="text-sm mt-1">${ev.details || 'No details available'}</p>
+                <p class="font-semibold">Fall Detected - ${safeSeverity}</p>
+                <p class="text-xs text-gray-600">${safeTimestamp} • ${safeLocation}</p>
+                <p class="text-sm mt-1">${safeDetails}</p>
               </div>
               <div class="flex gap-2">
                 ${ev.has_video ? `<button onclick="playVideo(${ev.id})" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">▶️ Video</button>` : ''}
@@ -703,27 +758,51 @@
 
     async function loadCareTeamOptions() {
       try {
-        const [caretakersRes, doctorsRes] = await Promise.all([
+        const [caretakersRes, doctorsRes, currentTeamRes] = await Promise.all([
           fetch('/api/available/caretakers'),
-          fetch('/api/available/doctors')
+          fetch('/api/available/doctors'),
+          fetch('/api/patients/my-care-team')
         ]);
         
         const caretakersData = await caretakersRes.json();
         const doctorsData = await doctorsRes.json();
+        const currentTeamData = await currentTeamRes.json();
         
         const caretakerSelect = document.getElementById('caretaker-select');
         const doctorSelect = document.getElementById('doctor-select');
         
-        // Populate caretakers
+        // Get currently assigned IDs
+        const currentCaretakerIds = (currentTeamData.caretakers || []).map(c => c.id);
+        const currentDoctorIds = (currentTeamData.doctors || []).map(d => d.id);
+        
+        // Display current assignments
+        const caretakersList = document.getElementById('caretakers-list');
+        const doctorsList = document.getElementById('doctors-list');
+        
+        if (currentTeamData.caretakers && currentTeamData.caretakers.length > 0) {
+          caretakersList.textContent = currentTeamData.caretakers.map(c => `${c.name} (${c.email})`).join(', ');
+        } else {
+          caretakersList.textContent = 'None assigned';
+        }
+        
+        if (currentTeamData.doctors && currentTeamData.doctors.length > 0) {
+          doctorsList.textContent = currentTeamData.doctors.map(d => `${d.name} (${d.email})`).join(', ');
+        } else {
+          doctorsList.textContent = 'None assigned';
+        }
+        
+        // Populate caretakers dropdown
         caretakerSelect.innerHTML = '<option value="">Select a caretaker...</option>';
         (caretakersData.caretakers || []).forEach(caretaker => {
-          caretakerSelect.innerHTML += `<option value="${caretaker.id}">${caretaker.name} (${caretaker.email})</option>`;
+          const selected = currentCaretakerIds.includes(caretaker.id) ? 'selected' : '';
+          caretakerSelect.innerHTML += `<option value="${caretaker.id}" ${selected}>${caretaker.name} (${caretaker.email})</option>`;
         });
         
-        // Populate doctors
+        // Populate doctors dropdown
         doctorSelect.innerHTML = '<option value="">Select a doctor...</option>';
         (doctorsData.doctors || []).forEach(doctor => {
-          doctorSelect.innerHTML += `<option value="${doctor.id}">${doctor.name} (${doctor.email})</option>`;
+          const selected = currentDoctorIds.includes(doctor.id) ? 'selected' : '';
+          doctorSelect.innerHTML += `<option value="${doctor.id}" ${selected}>${doctor.name} (${doctor.email})</option>`;
         });
       } catch (err) {
         console.error('Error loading care team options:', err);
@@ -757,6 +836,10 @@
         if (res.ok) {
           messageDiv.textContent = data.message || 'Care team updated successfully!';
           messageDiv.className = 'text-green-600';
+          // Reload care team options to show updated assignments
+          setTimeout(() => {
+            loadCareTeamOptions();
+          }, 500);
         } else {
           messageDiv.textContent = data.error || 'Error updating care team.';
           messageDiv.className = 'text-red-600';

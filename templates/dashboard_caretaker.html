@@ -246,15 +246,14 @@
                 ${p.status}
               </span>
             </div>
-            <p class="text-sm text-gray-500">📧 ${p.email}</p>
-            <p class="text-sm text-gray-500">📞 ${p.phone}</p>
+            <p class="text-sm text-gray-500">📧 ${p.email || 'No email'}</p>
             <p class="text-sm text-gray-500 mt-2">Last Fall: ${p.last_fall || 'Never'}</p>
             <div class="mt-4 flex gap-2">
               <button onclick="viewPatientDetails('${p.id}')" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm">
                 View Details
               </button>
-              <button onclick="contactPatient('${p.phone}')" class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg text-sm">
-                📞 Call
+              <button onclick="contactPatient('${p.email}')" class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg text-sm">
+                📧 Email
               </button>
             </div>
           </div>`);
@@ -611,11 +610,11 @@
       alert('Viewing details for patient: ' + patientId + '\n\nIn production, this would show detailed patient information.');
     }
 
-    function contactPatient(phone) {
-      if (phone && phone !== 'N/A') {
-        window.location.href = `tel:${phone}`;
+    function contactPatient(email) {
+      if (email && email !== 'N/A' && email.includes('@')) {
+        window.location.href = `mailto:${email}`;
       } else {
-        alert('Phone number not available');
+        alert('Email address not available');
       }
     }
 

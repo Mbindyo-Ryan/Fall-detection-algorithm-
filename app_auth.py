@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
-import sqlite3
 import secrets
 from datetime import datetime, timedelta
 import time
@@ -14,6 +13,10 @@ import pyotp
 import qrcode
 from io import BytesIO
 import base64
+
+# Database manager (supports SQLite and PostgreSQL)
+from db_manager import get_db_connection, close_db_connection, execute_query, DBConnection
+import sqlite3  # For error handling compatibility
 
 # Import FIXED detection logic
 import detection_skeleton
@@ -29,8 +32,11 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", "default_secret_key_change_me")
 app.config["GOOGLE_CLIENT_ID"] = os.environ.get("GOOGLE_CLIENT_ID")
 app.config["GOOGLE_CLIENT_SECRET"] = os.environ.get("GOOGLE_CLIENT_SECRET")
-DB_PATH = "system_config.db"
 ORGANIZATION_NAME = "CARE_System"
+
+# Database type (sqlite or postgresql) - set via DB_TYPE environment variable
+# Defaults to sqlite for backward compatibility
+DB_TYPE = os.environ.get("DB_TYPE", "sqlite").lower()
 
 # Configuration check
 print("--- ENVIRONMENT VARIABLE STATUS ---")
@@ -67,15 +73,7 @@ else:
 # =========================================================
 # DATABASE CONNECTION MANAGEMENT
 # =========================================================
-def get_db_connection():
-    """Create a new database connection for each request (Thread-Safe)"""
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except sqlite3.Error as e:
-        print(f"❌ Database connection error: {e}")
-        return None
+# get_db_connection() and close_db_connection() are imported from db_manager
 
 def init_database():
     """Initialize database tables on application start"""
@@ -105,13 +103,19 @@ def init_database():
         # Add role column if it doesn't exist (migration)
         try:
             c.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'patient'")
+            conn.commit()  # Commit after ALTER TABLE
             print("✅ 'role' column added to users table.")
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e).lower():
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "duplicate column" not in error_msg and "already exists" not in error_msg:
                 print(f"⚠️ Error adding role column: {e}")
+            conn.rollback()  # Rollback on error
         
         # Update existing users without role to 'patient'
-        c.execute("UPDATE users SET role = 'patient' WHERE role IS NULL")
+        try:
+            c.execute("UPDATE users SET role = 'patient' WHERE role IS NULL")
+        except Exception:
+            pass  # Ignore if column doesn't exist yet
         
         # Falls table (shared with detection module)
         c.execute('''CREATE TABLE IF NOT EXISTS falls (
@@ -137,9 +141,12 @@ def init_database():
         ]:
             try:
                 c.execute(ddl)
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" not in str(e).lower():
+                conn.commit()  # Commit each ALTER TABLE
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "duplicate column" not in error_msg and "already exists" not in error_msg:
                     print(f"⚠️ Error adding column '{column}' to falls table: {e}")
+                conn.rollback()  # Rollback on error
 
         # Patient-Caretaker relationships
         c.execute('''CREATE TABLE IF NOT EXISTS patient_caretaker (
@@ -254,13 +261,19 @@ def init_database():
 
         # Initialize fall detection database
         users = get_users_for_detection(conn)
-        init_fall_db(DB_PATH, users)
+        # Get DB_PATH from environment or use default
+        db_path = os.environ.get("DB_PATH", "system_config.db")
+        init_fall_db(db_path, users)
 
-    except sqlite3.Error as e:
+    except Exception as e:
         print(f"❌ Database initialization error: {e}")
+        import traceback
+        traceback.print_exc()
+        if conn:
+            conn.rollback()
     finally:
         if conn:
-            conn.close()
+            close_db_connection(conn)
 
 def get_users_for_detection(db_conn):
     """Fetch user details for detection module"""
@@ -815,9 +828,12 @@ def dashboard():
     if not session.get('is_2fa_verified'):
         return redirect(url_for('twofa_verification'))
 
-    # Set user ID for detector
+    # Set user ID for detector (CRITICAL: must match logged-in user)
     if detector and hasattr(detector, 'set_user_id'):
         detector.set_user_id(user_id)
+        print(f"✅ Dashboard: Set detector user_id to {user_id} (was: {detector.current_user_id if hasattr(detector, 'current_user_id') else 'unknown'})")
+    else:
+        print(f"⚠️ Dashboard: Detector not available or missing set_user_id method")
 
     conn = get_db_connection()
     if not conn:
@@ -872,8 +888,22 @@ def dashboard():
 @twofa_required
 def video_feed():
     source = request.args.get('source', '0')
+    user_id = session.get('user_id')
+    
+    # Ensure detector has the correct user_id (CRITICAL: must match logged-in user)
+    if detector and hasattr(detector, 'set_user_id'):
+        old_user_id = detector.current_user_id if hasattr(detector, 'current_user_id') else 'unknown'
+        detector.set_user_id(user_id)
+        if old_user_id != user_id:
+            print(f"🎯 Video feed: Updated detector user_id from {old_user_id} to {user_id}")
+        else:
+            print(f"🎯 Video feed: Detector user_id already set to {user_id}")
+    else:
+        print(f"⚠️ Video feed: Detector not available or missing set_user_id method")
+    
     if detector and hasattr(detector, 'set_camera_source'):
         detector.set_camera_source(source)
+    
     from detection_skeleton import generate_frames_async
     return Response(generate_frames_async(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
@@ -888,8 +918,11 @@ def api_falls():
     """Return recent fall events (role-based filtering)"""
     user_id = session.get('user_id')
     user_role = session.get('user_role', 'patient')
+    print(f"🔍 API /api/falls called - user_id: {user_id}, role: {user_role}")
+    
     conn = get_db_connection()
     if not conn:
+        print("❌ No database connection")
         return jsonify({"falls": []})
 
     try:
@@ -905,9 +938,10 @@ def api_falls():
             FROM falls f
             LEFT JOIN users u ON f.user_id = u.id
             WHERE f.user_id = ?
-            ORDER BY f.timestamp DESC
+            ORDER BY f.timestamp DESC, f.id DESC
             LIMIT 50
             """
+            print(f"🔍 Executing query for patient {user_id}")
             c.execute(query, (user_id,))
         elif user_role == 'caretaker':
             # Caretakers see falls from their assigned patients
@@ -919,7 +953,7 @@ def api_falls():
             LEFT JOIN users u ON f.user_id = u.id
             INNER JOIN patient_caretaker pc ON f.user_id = pc.patient_id
             WHERE pc.caretaker_id = ? AND pc.is_active = 1
-            ORDER BY f.timestamp DESC
+            ORDER BY f.timestamp DESC, f.id DESC
             LIMIT 50
             """
             c.execute(query, (user_id,))
@@ -931,12 +965,15 @@ def api_falls():
                 f.video_path, f.severity, f.location
             FROM falls f
             LEFT JOIN users u ON f.user_id = u.id
-            ORDER BY f.timestamp DESC
+            ORDER BY f.timestamp DESC, f.id DESC
             LIMIT 50
             """
             c.execute(query)
         
         fall_rows = c.fetchall()
+        print(f"📊 API /api/falls - Found {len(fall_rows)} fall records for user_id={user_id}, role={user_role}")
+        if len(fall_rows) > 0:
+            print(f"   Most recent fall: ID={fall_rows[0]['id']}, timestamp={fall_rows[0]['timestamp']}, status={fall_rows[0]['status']}")
 
         falls_list = []
         for row in fall_rows:
@@ -964,6 +1001,7 @@ def api_falls():
                 "has_video": bool(row['video_path'] if 'video_path' in row.keys() and row['video_path'] else None)
             })
 
+        print(f"✅ Returning {len(falls_list)} falls to frontend")
         return jsonify({"falls": falls_list})
     except sqlite3.Error as e:
         print(f"Error fetching falls: {e}")
@@ -1347,11 +1385,11 @@ def api_alert_status():
         from alert_service import alert_service
         return jsonify({
             'mode': alert_service.mode,
-            'twilio_configured': alert_service.twilio_client is not None,
+            'smtp_configured': alert_service.mode == 'smtp' and alert_service.smtp_server is not None,
             'rules': {
-                'severe': {'sms': True, 'call': True},
-                'moderate': {'sms': True, 'call': False},
-                'mild': {'sms': True, 'call': False}
+                'severe': {'email': True, 'delay_seconds': 0},
+                'moderate': {'email': True, 'delay_seconds': 30},
+                'mild': {'email': True, 'delay_seconds': 60}
             }
         })
     except ImportError:
@@ -2065,6 +2103,56 @@ def api_available_doctors():
         return jsonify({"doctors": doctors})
     except sqlite3.Error as e:
         return jsonify({"doctors": []})
+    finally:
+        conn.close()
+
+@app.route("/api/patients/my-care-team")
+@login_required
+@twofa_required
+def api_my_care_team():
+    """Get current care team (caretakers and doctors) for logged-in patient"""
+    user_id = session.get('user_id')
+    user_role = session.get('user_role')
+    
+    if user_role != 'patient':
+        return jsonify({"error": "Only patients can view their care team"}), 403
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database error", "caretakers": [], "doctors": []}), 500
+    
+    try:
+        c = conn.cursor()
+        
+        # Get assigned caretakers
+        c.execute("""
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            INNER JOIN patient_caretaker pc ON u.id = pc.caretaker_id
+            WHERE pc.patient_id = ? AND pc.is_active = 1
+            ORDER BY u.name
+        """, (user_id,))
+        caretakers = [{"id": row['id'], "name": row['name'], "email": row['email'], "phone": row['phone']} 
+                     for row in c.fetchall()]
+        
+        # Get assigned doctors
+        c.execute("""
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            INNER JOIN patient_doctor pd ON u.id = pd.doctor_id
+            WHERE pd.patient_id = ?
+            ORDER BY u.name
+        """, (user_id,))
+        doctors = [{"id": row['id'], "name": row['name'], "email": row['email'], "phone": row['phone']} 
+                  for row in c.fetchall()]
+        
+        return jsonify({
+            "caretakers": caretakers,
+            "doctors": doctors
+        })
+    except sqlite3.Error as e:
+        print(f"Error fetching care team: {e}")
+        return jsonify({"error": "Database error", "caretakers": [], "doctors": []}), 500
     finally:
         conn.close()
 
