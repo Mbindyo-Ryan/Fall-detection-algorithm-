@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Caretaker Dashboard - CARE System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+    .sidebar { transition: width 0.3s; }
+    .main-content { transition: margin-left 0.3s; }
+    .bg-mint-light { background-color: #f0fdf4; }
+    .hidden-view { display: none; }
+    .nav-item { cursor: pointer; }
+    .metric-card { transition: transform 0.2s; }
+    .metric-card:hover { transform: translateY(-2px); }
+    .severity-mild { background-color: #fef3c7; border-color: #f59e0b; }
+    .severity-moderate { background-color: #fed7aa; border-color: #f97316; }
+    .severity-severe { background-color: #fee2e2; border-color: #ef4444; }
+    .patient-card { transition: all 0.2s; }
+    .patient-card:hover { transform: translateY(-4px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+    .alert-badge { animation: pulse 2s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .emergency-button { transition: all 0.2s; }
+    .emergency-button:hover { transform: scale(1.05); }
+    .emergency-button:active { transform: scale(0.95); }
+  </style>
+</head>
+<body class="flex min-h-screen">
+  <!-- Sidebar -->
+  <nav id="sidebar" class="sidebar w-64 bg-white border-r border-gray-200 flex flex-col fixed top-0 left-0 h-full z-30 shadow-lg">
+    <div class="p-6 border-b border-gray-200">
+      <h1 class="text-2xl font-extrabold text-indigo-600 tracking-wider">CARE SYSTEM</h1>
+      <p class="text-xs text-gray-500 mt-1">Caretaker Portal</p>
+    </div>
+    <div class="flex-grow p-4 space-y-2">
+      <button data-view="dashboard" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 bg-mint-light hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">🏠</span> My Patients
+      </button>
+      <button data-view="alerts" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">🚨</span> Fall Alerts
+      </button>
+      <button data-view="contacts" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-gray-700 hover:bg-gray-100 transition">
+        <span class="text-xl mr-3">📞</span> Emergency Contacts
+      </button>
+    </div>
+    <div class="p-4 border-t border-gray-200">
+      {% if success %}
+      <div class="p-2 mb-2 bg-green-100 border border-green-400 text-green-700 rounded-lg text-xs">{{ success }}</div>
+      {% endif %}
+      <form method="POST" action="{{ url_for('logout') }}">
+        <button type="submit" class="nav-item w-full flex items-center p-3 rounded-xl font-medium text-red-600 hover:bg-red-50 transition">
+          <span class="text-xl mr-3">🚪</span> Logout
+        </button>
+      </form>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main-content flex-grow ml-64 p-8 bg-mint-light min-h-screen">
+    <!-- DASHBOARD VIEW -->
+    <div id="dashboard-view" class="view-content">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Caretaker Dashboard</h2>
+        <p class="text-gray-500 mt-1">Welcome, {{ user_name }} - Monitor your assigned patients.</p>
+      </header>
+
+      <!-- Quick Stats -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">My Patients</p>
+          <p id="my-patients-count" class="text-4xl font-bold text-indigo-600 mt-1">0</p>
+          <p class="text-xs text-gray-400 mt-2">Patients under your care.</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">Active Alerts</p>
+          <p id="active-alerts" class="text-4xl font-bold text-red-600 mt-1">0</p>
+          <p class="text-xs text-gray-400 mt-2">Recent fall notifications.</p>
+        </div>
+        <div class="metric-card bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <p class="text-sm font-semibold text-gray-500">Falls Today</p>
+          <p id="falls-today" class="text-4xl font-bold text-orange-600 mt-1">0</p>
+          <p class="text-xs text-gray-400 mt-2">Fall events today.</p>
+        </div>
+      </div>
+
+      <!-- Detection Sensitivity -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 mb-10">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-2">Detection Sensitivity</h3>
+        <div class="flex items-center gap-3">
+          <input id="ct-sensitivity" type="range" min="0.1" max="1.0" step="0.05" class="w-full" />
+          <span id="ct-sensitivity-value" class="text-sm font-semibold w-12 text-right">0.5</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">Higher = more sensitive (system-wide)</p>
+      </div>
+
+      <!-- Emergency Actions -->
+      <div class="bg-red-50 border-2 border-red-200 p-6 rounded-2xl shadow-lg mb-10">
+        <h3 class="text-2xl font-semibold text-red-800 mb-4">🚨 Emergency Actions</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <button onclick="contactDoctor()" class="emergency-button bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl transition">
+            📞 Contact Doctor
+          </button>
+          <button onclick="callEmergency()" class="emergency-button bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-6 rounded-xl transition">
+            🚑 Emergency Services
+          </button>
+          <button onclick="viewAllAlerts()" class="emergency-button bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-xl transition">
+            ⚠️ View All Alerts
+          </button>
+        </div>
+      </div>
+
+      <!-- My Patients -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100 mb-10">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4">My Patients</h3>
+        <div id="my-patients-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <p class="text-center text-gray-500 col-span-full">Loading patients...</p>
+        </div>
+      </div>
+
+      <!-- Recent Fall Notifications -->
+      <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+        <h3 class="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+          Recent Fall Notifications
+          <span id="notification-count" class="ml-2 alert-badge bg-red-600 text-white px-3 py-1 rounded-full text-sm">0</span>
+        </h3>
+        <div id="notifications-list" class="space-y-3 max-h-96 overflow-y-auto">
+          <p class="text-center text-gray-500">No recent notifications</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ALERTS VIEW -->
+    <div id="alerts-view" class="view-content hidden-view">
+      <header class="mb-8">
+        <h2 class="text-4xl font-extrabold text-gray-900">Fall Alerts & Events</h2>
+        <p class="text-gray-500 mt-1">All fall events from your patients with video playback.</p>
+      </header>
+      <div id="alerts-list" class="space-y-4">
+        <p class="text-center text-gray-500">Loading alerts...</p>
+      </div>
+    </div>
+
+    <!-- CONTACTS VIEW -->
+    <div id="contacts-view" class="view-content hidden-view">
+      <header class="mb-8 flex justify-between items-center">
+        <div>
+          <h2 class="text-4xl font-extrabold text-gray-900">Emergency Contacts</h2>
+          <p class="text-gray-500 mt-1">Quick access to doctors and emergency services.</p>
+        </div>
+      </header>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <h3 class="text-xl font-semibold mb-4">Assigned Doctors</h3>
+          <div id="doctors-list" class="space-y-3">
+            <p class="text-gray-500">No doctors assigned</p>
+          </div>
+        </div>
+        <div class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+          <h3 class="text-xl font-semibold mb-4">Emergency Services</h3>
+          <div class="space-y-3">
+            <button onclick="callEmergency()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition">
+              🚑 Call 911 / Emergency Services
+            </button>
+            <button onclick="callEmergency('ambulance')" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition">
+              🏥 Request Ambulance
+            </button>
+            <button onclick="callEmergency('police')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition">
+              🚔 Contact Police
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const navItems = document.querySelectorAll('button.nav-item[data-view]');
+    const views = document.querySelectorAll('.view-content');
+    
+    function switchView(target) {
+      views.forEach(v => v.classList.add('hidden-view'));
+      const targetView = document.getElementById(`${target}-view`);
+      if (targetView) targetView.classList.remove('hidden-view');
+      
+      navItems.forEach(btn => btn.classList.remove('bg-mint-light'));
+      const activeButton = document.querySelector(`button[data-view="${target}"]`);
+      if (activeButton) activeButton.classList.add('bg-mint-light');
+      
+      if (target === 'alerts') fetchAlerts();
+      if (target === 'contacts') fetchContacts();
+    }
+    
+    navItems.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const view = btn.getAttribute('data-view');
+        if (view) switchView(view);
+      });
+    });
+    
+    switchView('dashboard');
+
+    // Fetch Dashboard Data
+    async function fetchDashboard() {
+      try {
+        const [patientsRes, fallsRes] = await Promise.all([
+          fetch('/api/users'),
+          fetch('/api/falls')
+        ]);
+        const patientsData = await patientsRes.json();
+        const fallsData = await fallsRes.json();
+        
+        const today = new Date().toISOString().split('T')[0];
+        const todayFalls = fallsData.falls.filter(f => f.timestamp.startsWith(today));
+        const recentFalls = fallsData.falls.filter(f => f.severity === 'severe' || f.status === 'CONFIRMED_FALL').slice(0, 5);
+        
+        document.getElementById('my-patients-count').textContent = patientsData.users.length;
+        document.getElementById('active-alerts').textContent = recentFalls.length;
+        document.getElementById('falls-today').textContent = todayFalls.length;
+        document.getElementById('notification-count').textContent = recentFalls.length;
+        
+        renderMyPatients(patientsData.users);
+        renderNotifications(recentFalls);
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    function renderMyPatients(patients) {
+      const grid = document.getElementById('my-patients-grid');
+      grid.innerHTML = '';
+      if (patients.length === 0) {
+        grid.innerHTML = '<p class="text-center text-gray-500 col-span-full">No patients assigned to you.</p>';
+        return;
+      }
+      patients.forEach(p => {
+        const statusColor = p.status === 'High Alert' ? 'border-red-500' : 'border-green-500';
+        grid.insertAdjacentHTML('beforeend', `
+          <div class="patient-card bg-white p-6 rounded-2xl shadow-lg border-t-4 ${statusColor}">
+            <div class="flex justify-between items-start mb-2">
+              <p class="text-xl font-bold">${p.name}</p>
+              <span class="px-2 py-1 ${p.status === 'High Alert' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'} rounded text-xs">
+                ${p.status}
+              </span>
+            </div>
+            <p class="text-sm text-gray-500">📧 ${p.email}</p>
+            <p class="text-sm text-gray-500">📞 ${p.phone}</p>
+            <p class="text-sm text-gray-500 mt-2">Last Fall: ${p.last_fall || 'Never'}</p>
+            <div class="mt-4 flex gap-2">
+              <button onclick="viewPatientDetails('${p.id}')" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm">
+                View Details
+              </button>
+              <button onclick="contactPatient('${p.phone}')" class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg text-sm">
+                📞 Call
+              </button>
+            </div>
+          </div>`);
+      });
+    }
+
+    async function renderNotifications(notifications) {
+      const list = document.getElementById('notifications-list');
+      list.innerHTML = '';
+      if (notifications.length === 0) {
+        list.innerHTML = '<p class="text-center text-gray-500">No recent notifications</p>';
+        return;
+      }
+      
+      for (const n of notifications) {
+        const severityClass = `severity-${n.severity || 'moderate'}`;
+        
+        // Fetch doctor remarks
+        let remarksData = null;
+        try {
+          const remarksRes = await fetch(`/api/falls/${n.id}/remarks`);
+          if (remarksRes.ok) {
+            remarksData = await remarksRes.json();
+          }
+        } catch (err) {
+          console.error('Error fetching remarks:', err);
+        }
+        
+        const hasReview = remarksData && remarksData.review;
+        
+        list.insertAdjacentHTML('beforeend', `
+          <div class="p-4 rounded-xl border-l-4 ${severityClass} mb-3">
+            <div class="flex justify-between items-center mb-2">
+              <div class="flex-1">
+                <p class="font-semibold">${n.user_name} - ${n.severity || 'moderate'} fall</p>
+                <p class="text-xs text-gray-600">${n.timestamp} • ${n.location || 'Unknown'}</p>
+                ${hasReview ? `<p class="text-xs text-blue-600 mt-1">👨‍⚕️ Doctor has reviewed</p>` : ''}
+              </div>
+              <div class="flex gap-2">
+                ${n.has_video ? `<button onclick="playVideo(${n.id})" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">▶️ Video</button>` : ''}
+                <button onclick="toggleCaretakerNotificationDetails(${n.id})" class="bg-blue-600 text-white px-3 py-1 rounded text-sm">
+                  ${hasReview ? '📋 Review' : '📋 Details'}
+                </button>
+                <button onclick="respondToAlert(${n.id})" class="bg-red-600 text-white px-3 py-1 rounded text-sm">Respond</button>
+              </div>
+            </div>
+            
+            <!-- Doctor Review Section (initially hidden) -->
+            <div id="caretaker-notification-details-${n.id}" class="hidden mt-3 pt-3 border-t border-gray-200">
+              ${hasReview ? `
+                <div class="bg-blue-50 p-3 rounded-lg mb-2">
+                  <p class="text-xs font-semibold mb-1">👨‍⚕️ Doctor's Review:</p>
+                  <p class="text-xs mb-1"><strong>Remarks:</strong> ${remarksData.review.remarks || 'No remarks'}</p>
+                  <p class="text-xs"><strong>Recommendations:</strong> ${remarksData.review.recommendations || 'None'}</p>
+                </div>
+              ` : `
+                <div class="bg-yellow-50 p-3 rounded-lg mb-2">
+                  <p class="text-xs text-yellow-800">⏳ Waiting for doctor's review...</p>
+                </div>
+              `}
+            </div>
+          </div>
+        `);
+      }
+    }
+    
+    function toggleCaretakerNotificationDetails(fallId) {
+      const detailsDiv = document.getElementById(`caretaker-notification-details-${fallId}`);
+      if (detailsDiv) {
+        detailsDiv.classList.toggle('hidden');
+      }
+    }
+
+    async function fetchAlerts() {
+      try {
+        const res = await fetch('/api/falls');
+        const data = await res.json();
+        renderAlerts(data.falls);
+      } catch (err) {
+        console.error('Error:', err);
+      }
+    }
+
+    async function renderAlerts(alerts) {
+      const list = document.getElementById('alerts-list');
+      list.innerHTML = '';
+      if (alerts.length === 0) {
+        list.innerHTML = '<p class="text-center text-gray-500">No fall alerts</p>';
+        return;
+      }
+      
+      for (const alert of alerts) {
+        const severityClass = `severity-${alert.severity || 'moderate'}`;
+        
+        // Fetch doctor remarks
+        let remarksData = null;
+        try {
+          const remarksRes = await fetch(`/api/falls/${alert.id}/remarks`);
+          if (remarksRes.ok) {
+            remarksData = await remarksRes.json();
+          }
+        } catch (err) {
+          console.error('Error fetching remarks:', err);
+        }
+        
+        const hasReview = remarksData && remarksData.review;
+        const hasFiles = remarksData && remarksData.files && remarksData.files.length > 0;
+        
+        list.insertAdjacentHTML('beforeend', `
+          <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 ${severityClass} mb-4">
+            <div class="flex justify-between items-start mb-3">
+              <div class="flex-1">
+                <div class="flex items-center gap-2 mb-2">
+                  <p class="font-semibold text-lg">${alert.user_name}</p>
+                  <span class="px-2 py-1 bg-gray-200 rounded text-xs capitalize">${alert.severity || 'moderate'}</span>
+                </div>
+                <p class="text-sm text-gray-600">${alert.timestamp}</p>
+                <p class="text-sm text-gray-600">Location: ${alert.location || 'Unknown'}</p>
+                <p class="text-sm mt-2">${alert.details || 'No details'}</p>
+              </div>
+              <div class="flex flex-col gap-2 ml-4">
+                ${alert.has_video ? `
+                  <button onclick="playVideo(${alert.id})" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg">
+                    ▶️ Play Video
+                  </button>
+                ` : ''}
+                <button onclick="toggleCaretakerAlertDetails(${alert.id})" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                  ${hasReview ? '📋 View Review' : '📋 Details'}
+                </button>
+                <button onclick="respondToAlert(${alert.id})" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg">
+                  🚨 Respond
+                </button>
+              </div>
+            </div>
+            
+            <!-- Doctor Review Section (initially hidden) -->
+            <div id="caretaker-alert-details-${alert.id}" class="hidden mt-4 pt-4 border-t border-gray-200">
+              ${hasReview ? `
+                <div class="bg-blue-50 p-4 rounded-lg mb-3">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="text-xl">👨‍⚕️</span>
+                    <p class="font-semibold">Doctor's Review</p>
+                    <span class="text-xs text-gray-500">by ${remarksData.review.doctor_name} • ${remarksData.review.review_date}</span>
+                  </div>
+                  <p class="text-sm mb-2"><strong>Remarks:</strong> ${remarksData.review.remarks || 'No remarks'}</p>
+                  <p class="text-sm mb-2"><strong>Recommendations:</strong> ${remarksData.review.recommendations || 'None'}</p>
+                  ${remarksData.review.recommended_actions && remarksData.review.recommended_actions.length > 0 ? `
+                    <div class="mt-2">
+                      <p class="text-sm font-semibold mb-1">Recommended Actions:</p>
+                      <div class="flex flex-wrap gap-2">
+                        ${remarksData.review.recommended_actions.map(action => `
+                          <span class="px-2 py-1 bg-white rounded text-xs">${action.replace('_', ' ').toUpperCase()}</span>
+                        `).join('')}
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${remarksData.review.follow_up_date ? `
+                    <p class="text-sm mt-2"><strong>Follow-up Date:</strong> ${remarksData.review.follow_up_date}</p>
+                  ` : ''}
+                </div>
+              ` : `
+                <div class="bg-yellow-50 p-4 rounded-lg mb-3">
+                  <p class="text-sm text-yellow-800">⏳ Waiting for doctor's review...</p>
+                </div>
+              `}
+              
+              <!-- File Upload Section -->
+              <div class="mb-3">
+                <p class="font-semibold text-sm mb-2">📎 Upload Files (X-rays, Scans, Reports)</p>
+                <form id="caretaker-upload-form-${alert.id}" onsubmit="uploadCaretakerFile(event, ${alert.id})" class="flex gap-2">
+                  <input type="file" id="caretaker-file-input-${alert.id}" accept=".pdf,.jpg,.jpeg,.png" required class="flex-1 text-sm">
+                  <select id="caretaker-file-type-${alert.id}" class="px-2 py-1 border rounded text-sm">
+                    <option value="xray">X-Ray</option>
+                    <option value="scan">Scan</option>
+                    <option value="report">Report</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <button type="submit" class="bg-green-600 text-white px-4 py-1 rounded text-sm hover:bg-green-700">
+                    📤 Upload
+                  </button>
+                </form>
+              </div>
+              
+              <!-- Uploaded Files List -->
+              <div class="mt-3">
+                <p class="font-semibold text-sm mb-2">📁 Uploaded Files:</p>
+                <div id="caretaker-files-list-${alert.id}" class="space-y-2">
+                  ${hasFiles ? remarksData.files.map(file => `
+                    <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+                      <div class="flex items-center gap-2">
+                        <span class="text-xl">${file.file_type === 'xray' ? '🩻' : file.file_type === 'scan' ? '📊' : '📄'}</span>
+                        <div>
+                          <p class="text-sm font-medium">${file.file_name}</p>
+                          <p class="text-xs text-gray-500">Uploaded: ${file.uploaded_at}</p>
+                        </div>
+                      </div>
+                      <button onclick="viewFileComments(${file.id}, ${alert.id})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">
+                        💬 Comments
+                      </button>
+                    </div>
+                  `).join('') : '<p class="text-sm text-gray-500">No files uploaded yet</p>'}
+                </div>
+              </div>
+            </div>
+          </div>
+        `);
+      }
+    }
+    
+    function toggleCaretakerAlertDetails(fallId) {
+      const detailsDiv = document.getElementById(`caretaker-alert-details-${fallId}`);
+      if (detailsDiv) {
+        detailsDiv.classList.toggle('hidden');
+        if (!detailsDiv.classList.contains('hidden')) {
+          refreshCaretakerFilesList(fallId);
+        }
+      }
+    }
+    
+    async function uploadCaretakerFile(event, fallId) {
+      event.preventDefault();
+      const fileInput = document.getElementById(`caretaker-file-input-${fallId}`);
+      const fileType = document.getElementById(`caretaker-file-type-${fallId}`).value;
+      
+      if (!fileInput.files[0]) {
+        alert('Please select a file');
+        return;
+      }
+      
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('file_type', fileType);
+      
+      try {
+        const res = await fetch(`/api/falls/${fallId}/files`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (res.ok) {
+          alert('File uploaded successfully!');
+          fileInput.value = '';
+          refreshCaretakerFilesList(fallId);
+          fetchAlerts();
+        } else {
+          alert('Error uploading file');
+        }
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error uploading file');
+      }
+    }
+    
+    async function refreshCaretakerFilesList(fallId) {
+      try {
+        const res = await fetch(`/api/falls/${fallId}/files`);
+        const data = await res.json();
+        
+        const filesList = document.getElementById(`caretaker-files-list-${fallId}`);
+        if (!filesList) return;
+        
+        if (data.files && data.files.length > 0) {
+          filesList.innerHTML = data.files.map(file => `
+            <div class="bg-gray-50 p-3 rounded-lg flex justify-between items-center">
+              <div class="flex items-center gap-2">
+                <span class="text-xl">${file.file_type === 'xray' ? '🩻' : file.file_type === 'scan' ? '📊' : '📄'}</span>
+                <div>
+                  <p class="text-sm font-medium">${file.file_name}</p>
+                  <p class="text-xs text-gray-500">Uploaded: ${file.uploaded_at}</p>
+                </div>
+              </div>
+              <button onclick="viewFileComments(${file.id}, ${fallId})" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">
+                💬 Comments (${file.comment_count || 0})
+              </button>
+            </div>
+          `).join('');
+        } else {
+          filesList.innerHTML = '<p class="text-sm text-gray-500">No files uploaded yet</p>';
+        }
+      } catch (err) {
+        console.error('Error refreshing files:', err);
+      }
+    }
+    
+    async function viewFileComments(fileId, fallId) {
+      try {
+        const res = await fetch(`/api/files/${fileId}/comments`);
+        const data = await res.json();
+        
+        const modal = document.createElement('div');
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+        modal.innerHTML = `
+          <div class="bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4">
+              <h2 class="text-2xl font-bold">Doctor's Comments</h2>
+              <button onclick="this.closest('.fixed').remove()" class="text-2xl">&times;</button>
+            </div>
+            <div class="space-y-3">
+              ${data.comments && data.comments.length > 0 ? 
+                data.comments.map(comment => `
+                  <div class="bg-blue-50 p-4 rounded-lg">
+                    <div class="flex justify-between items-start mb-2">
+                      <p class="font-semibold">${comment.doctor_name}</p>
+                      <p class="text-xs text-gray-500">${comment.created_at}</p>
+                    </div>
+                    <p class="text-sm">${comment.comment}</p>
+                  </div>
+                `).join('') :
+                '<p class="text-gray-500">No comments yet from doctor</p>'
+              }
+            </div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+      } catch (err) {
+        console.error('Error:', err);
+        alert('Error loading comments');
+      }
+    }
+
+    async function fetchContacts() {
+      // Would fetch from emergency contacts API
+      document.getElementById('doctors-list').innerHTML = '<p class="text-gray-500">Contact information will be displayed here</p>';
+    }
+
+    function playVideo(fallId) {
+      window.open(`/api/falls/${fallId}/video`, '_blank');
+    }
+
+    function respondToAlert(fallId) {
+      if (confirm('Mark this alert as responded? This will notify the patient.')) {
+        alert('Alert response sent! Patient has been notified.');
+      }
+    }
+
+    function contactDoctor() {
+      alert('📞 Contacting assigned doctor...\n\nIn production, this would:\n1. Call/SMS the doctor\n2. Send email notification\n3. Log the contact attempt');
+    }
+
+    function callEmergency(type = 'general') {
+      const messages = {
+        general: '🚨 Calling Emergency Services (911)...\n\nIn production, this would dial emergency services.',
+        ambulance: '🏥 Requesting Ambulance...\n\nIn production, this would contact ambulance services.',
+        police: '🚔 Contacting Police...\n\nIn production, this would contact police services.'
+      };
+      alert(messages[type] || messages.general);
+    }
+
+    function viewAllAlerts() {
+      switchView('alerts');
+    }
+
+    function viewPatientDetails(patientId) {
+      alert('Viewing details for patient: ' + patientId + '\n\nIn production, this would show detailed patient information.');
+    }
+
+    function contactPatient(phone) {
+      if (phone && phone !== 'N/A') {
+        window.location.href = `tel:${phone}`;
+      } else {
+        alert('Phone number not available');
+      }
+    }
+
+    setInterval(fetchDashboard, 5000);
+    document.addEventListener('DOMContentLoaded', fetchDashboard);
+
+    // Sensitivity control wiring
+    const ctSlider = document.getElementById('ct-sensitivity');
+    const ctValue = document.getElementById('ct-sensitivity-value');
+    async function loadSensitivity() {
+      try {
+        const res = await fetch('/api/sensitivity');
+        await res.json();
+        ctSlider.value = 0.5; // midpoint default
+        ctValue.textContent = Number(ctSlider.value).toFixed(2);
+      } catch (e) { console.error(e); }
+    }
+    ctSlider && ctSlider.addEventListener('input', async (e) => {
+      const v = Number(e.target.value);
+      ctValue.textContent = v.toFixed(2);
+      try {
+        await fetch('/api/sensitivity', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sensitivity: v }) });
+      } catch (e) { console.error(e); }
+    });
+    document.addEventListener('DOMContentLoaded', loadSensitivity);
+  </script>
+</body>
+</html>
+
